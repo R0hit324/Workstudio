@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus Code — Collaborative IDE</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#080b10;--s1:#0e1117;--s2:#141920;--s3:#1c2330;--s4:#222d3d;
+  --b1:rgba(255,255,255,0.05);--b2:rgba(255,255,255,0.09);--b3:rgba(255,255,255,0.16);
+  --t1:#e8edf5;--t2:#8a95a8;--t3:#4a5568;--t4:#2d3748;
+  --acc:#3d8ef0;--acc2:#7bb3f8;--accg:rgba(61,142,240,0.12);
+  --green:#2ecc71;--greeng:rgba(46,204,113,0.12);
+  --red:#e74c3c;--redg:rgba(231,76,60,0.12);
+  --amber:#f39c12;--amberg:rgba(243,156,18,0.12);
+  --purple:#9b59b6;--teal:#1abc9c;
+  --r:8px;--rl:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t1);display:flex;flex-direction:column;}
+
+/* ── SETUP ── */
+#setup{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:300;overflow-y:auto;padding:20px;}
+.sc{background:var(--s1);border:1px solid var(--b2);border-radius:18px;padding:32px 36px;width:480px;max-width:100%;}
+.s-logo{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+.s-lm{width:36px;height:36px;background:var(--acc);border-radius:9px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:16px;color:#fff;}
+.s-lt{font-family:'Syne',sans-serif;font-weight:800;font-size:20px;letter-spacing:-0.5px;}
+.s-tag{font-size:13px;color:var(--t3);margin-bottom:24px;line-height:1.6;}
+.fl{margin-bottom:14px;}
+.fl label{display:block;font-size:10px;font-weight:500;letter-spacing:1px;text-transform:uppercase;color:var(--t3);margin-bottom:5px;}
+.fi{width:100%;background:var(--s2);border:1px solid var(--b2);border-radius:var(--r);padding:10px 13px;color:var(--t1);font-size:13px;font-family:'DM Sans',sans-serif;outline:none;transition:border-color 0.15s;}
+.fi:focus{border-color:var(--acc);}
+.fi::placeholder{color:var(--t4);}
+.hint{font-size:11px;color:var(--t3);margin-top:4px;line-height:1.5;}
+.hint a{color:var(--acc2);text-decoration:none;}
+.err{background:var(--redg);border:1px solid rgba(231,76,60,0.3);border-radius:7px;padding:9px 13px;font-size:12px;color:var(--red);margin-top:10px;display:none;}
+.sa{display:flex;gap:8px;margin-top:20px;}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:var(--r);font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font-family:'DM Sans',sans-serif;transition:all 0.15s;white-space:nowrap;}
+.btn:hover{background:var(--s3);color:var(--t1);border-color:var(--b3);}
+.btn:disabled{opacity:0.4;cursor:not-allowed;}
+.btn-p{background:var(--acc);border-color:var(--acc);color:#fff;flex:1;justify-content:center;}
+.btn-p:hover{background:var(--acc2);border-color:var(--acc2);color:#080b10;}
+.btn-sm{padding:5px 11px;font-size:12px;border-radius:6px;}
+.btn-green{background:var(--green);border-color:var(--green);color:#080b10;}
+.btn-green:hover{opacity:0.85;}
+.btn-red{background:var(--red);border-color:var(--red);color:#fff;}
+.btn-red:hover{opacity:0.85;}
+
+/* ── TOPBAR ── */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:48px;background:var(--s1);border-bottom:1px solid var(--b1);flex-shrink:0;}
+.tb-l{display:flex;align-items:center;gap:12px;}
+.tb-r{display:flex;align-items:center;gap:6px;}
+.logo-sm{display:flex;align-items:center;gap:7px;}
+.lm-sm{width:26px;height:26px;background:var(--acc);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:12px;color:#fff;}
+.ln-sm{font-family:'Syne',sans-serif;font-weight:700;font-size:14px;}
+.file-tabs{display:flex;align-items:center;gap:1px;overflow-x:auto;max-width:500px;}
+.file-tabs::-webkit-scrollbar{height:0;}
+.ftab{display:flex;align-items:center;gap:7px;padding:6px 12px;font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--t3);cursor:pointer;border-radius:6px 6px 0 0;border:1px solid transparent;border-bottom:none;transition:all 0.12s;white-space:nowrap;}
+.ftab:hover{color:var(--t2);background:var(--s2);}
+.ftab.active{color:var(--t1);background:var(--s2);border-color:var(--b1);}
+.ftab .fx{color:var(--t4);font-size:11px;cursor:pointer;padding:1px 3px;border-radius:3px;}
+.ftab .fx:hover{color:var(--red);background:var(--redg);}
+.lang-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.members-row{display:flex;align-items:center;gap:-3px;}
+.mav{width:26px;height:26px;border-radius:50%;border:2px solid var(--s1);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;margin-left:-5px;cursor:default;}
+.mav:first-child{margin-left:0;}
+
+/* ── MAIN LAYOUT ── */
+#app{display:none;flex-direction:column;height:100%;}
+.workspace{display:flex;flex:1;overflow:hidden;}
+
+/* ── SIDEBAR ── */
+.sidebar{width:200px;min-width:200px;background:var(--s1);border-right:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;}
+.sb-section{padding:10px 8px 4px;}
+.sb-label{font-size:9px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:var(--t4);padding:0 6px;margin-bottom:4px;}
+.sb-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--t2);transition:all 0.12s;font-family:'JetBrains Mono',monospace;}
+.sb-item:hover{background:var(--s2);color:var(--t1);}
+.sb-item.active{background:var(--accg);color:var(--acc2);}
+.sb-item .si{font-size:13px;flex-shrink:0;}
+.sb-new{margin:8px;display:flex;gap:4px;}
+.lang-pick{flex:1;background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:5px 8px;color:var(--t2);font-size:11px;font-family:'JetBrains Mono',monospace;outline:none;cursor:pointer;}
+.sb-members{padding:8px;margin-top:auto;border-top:1px solid var(--b1);}
+.sm-title{font-size:9px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:var(--t4);padding:0 4px;margin-bottom:6px;}
+.sm-item{display:flex;align-items:center;gap:7px;padding:4px 4px;border-radius:5px;}
+.sm-name{font-size:12px;color:var(--t2);}
+.online-dot{width:6px;height:6px;border-radius:50%;background:var(--green);}
+
+/* ── EDITOR AREA ── */
+.editor-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative;}
+.editor-toolbar{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--s2);border-bottom:1px solid var(--b1);flex-shrink:0;gap:8px;}
+.et-left{display:flex;align-items:center;gap:6px;}
+.et-right{display:flex;align-items:center;gap:6px;}
+.lang-badge{display:flex;align-items:center;gap:6px;padding:4px 10px;background:var(--s3);border:1px solid var(--b1);border-radius:6px;font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--t2);}
+.run-btn{display:flex;align-items:center;gap:6px;padding:6px 14px;background:var(--green);border:none;border-radius:7px;color:#080b10;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.15s;}
+.run-btn:hover{background:#27ae60;}
+.run-btn:disabled{opacity:0.5;cursor:not-allowed;}
+.run-btn.running{background:var(--amber);}
+.format-btn{display:flex;align-items:center;gap:5px;padding:5px 10px;background:transparent;border:1px solid var(--b2);border-radius:6px;color:var(--t2);font-size:11px;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.15s;}
+.format-btn:hover{background:var(--s3);color:var(--t1);}
+
+/* ── CODE EDITOR ── */
+.editor-container{flex:1;display:flex;overflow:hidden;position:relative;}
+.line-nums{padding:14px 0;background:var(--s1);border-right:1px solid var(--b1);text-align:right;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;color:var(--t4);user-select:none;min-width:44px;overflow:hidden;}
+.ln{padding:0 10px 0 8px;}
+.code-area{flex:1;position:relative;overflow:hidden;}
+#codeHighlight{
+  position:absolute;inset:0;padding:14px 16px;
+  font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;
+  pointer-events:none;white-space:pre;overflow:auto;tab-size:2;
+  color:transparent;
+}
+#codeInput{
+  position:absolute;inset:0;padding:14px 16px;
+  font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;
+  background:transparent;border:none;outline:none;resize:none;
+  color:var(--t1);caret-color:var(--acc2);
+  white-space:pre;overflow:auto;tab-size:2;spellcheck:false;
+  z-index:2;
+}
+#codeInput::selection{background:rgba(61,142,240,0.25);}
+
+/* Syntax highlight colors */
+.kw{color:#c792ea;} .str{color:#c3e88d;} .num{color:#f78c6c;}
+.cmt{color:#546e7a;font-style:italic;} .fn{color:#82aaff;}
+.typ{color:#ffcb6b;} .op{color:#89ddff;} .pun{color:#89ddff;}
+.builtin{color:#f07178;}
+
+/* ── AUTOCOMPLETE DROPDOWN ── */
+#autocomplete{
+  position:absolute;background:var(--s2);border:1px solid var(--b3);
+  border-radius:var(--r);padding:4px;z-index:100;max-height:200px;
+  overflow-y:auto;min-width:180px;display:none;
+  box-shadow:0 8px 32px rgba(0,0,0,0.5);
+}
+.ac-item{
+  padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;
+  color:var(--t2);cursor:pointer;border-radius:5px;display:flex;align-items:center;gap:8px;
+}
+.ac-item:hover,.ac-item.sel{background:var(--accg);color:var(--acc2);}
+.ac-kind{font-size:9px;padding:1px 5px;border-radius:3px;background:var(--s3);color:var(--t3);}
+
+/* ── OUTPUT PANEL ── */
+.output-panel{height:200px;min-height:80px;max-height:60%;background:var(--s1);border-top:1px solid var(--b1);display:flex;flex-direction:column;flex-shrink:0;}
+.op-header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;border-bottom:1px solid var(--b1);flex-shrink:0;}
+.op-title{font-size:11px;font-weight:500;letter-spacing:0.5px;color:var(--t2);display:flex;align-items:center;gap:7px;}
+.op-status{width:7px;height:7px;border-radius:50%;background:var(--t4);}
+.op-status.ok{background:var(--green);}
+.op-status.err{background:var(--red);}
+.op-status.run{background:var(--amber);animation:blink 0.8s infinite;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.op-actions{display:flex;gap:4px;}
+.op-body{flex:1;overflow-y:auto;padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6;}
+.op-line{margin-bottom:1px;}
+.op-line.stdout{color:#c3e88d;}
+.op-line.stderr{color:var(--red);}
+.op-line.info{color:var(--t3);}
+.op-line.sys{color:var(--acc2);}
+.resize-handle{height:4px;background:transparent;cursor:ns-resize;border-top:1px solid var(--b1);}
+.resize-handle:hover{background:var(--acc);}
+
+/* ── COLLAB CURSOR ── */
+.collab-cursor{position:absolute;width:2px;pointer-events:none;z-index:10;}
+.collab-label{position:absolute;top:-18px;left:0;font-size:9px;padding:1px 5px;border-radius:3px;white-space:nowrap;font-family:'DM Sans',sans-serif;}
+
+/* ── MODAL ── */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(5px);display:none;align-items:center;justify-content:center;z-index:200;}
+.modal-bg.open{display:flex;}
+.modal{background:var(--s1);border:1px solid var(--b2);border-radius:16px;padding:26px;width:460px;max-width:95vw;}
+.modal-h{font-family:'Syne',sans-serif;font-weight:700;font-size:16px;margin-bottom:6px;}
+.modal-sub{font-size:13px;color:var(--t2);margin-bottom:18px;line-height:1.6;}
+.link-box{display:flex;gap:8px;background:var(--s2);border:1px solid var(--b2);border-radius:var(--r);padding:10px 13px;margin-bottom:14px;}
+.link-txt{flex:1;font-size:11px;color:var(--acc2);font-family:'JetBrains Mono',monospace;word-break:break-all;}
+.copy-btn{padding:5px 12px;border-radius:6px;background:var(--acc);border:none;color:#fff;font-size:12px;font-weight:500;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.15s;white-space:nowrap;flex-shrink:0;}
+.copy-btn:hover{background:var(--acc2);color:#080b10;}
+.copy-btn.ok{background:var(--green);color:#080b10;}
+.modal-note{font-size:11px;color:var(--t3);padding:9px 13px;background:var(--s2);border-radius:7px;line-height:1.6;}
+.modal-foot{display:flex;justify-content:flex-end;margin-top:16px;}
+
+/* ── TOAST ── */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--s2);border:1px solid var(--b2);border-radius:9px;padding:10px 16px;font-size:12px;color:var(--t1);display:flex;align-items:center;gap:7px;z-index:999;transform:translateY(16px);opacity:0;transition:all 0.22s;pointer-events:none;}
+.toast.show{transform:translateY(0);opacity:1;}
+
+/* ── STATUS BAR ── */
+.statusbar{display:flex;align-items:center;gap:14px;padding:3px 14px;background:var(--s1);border-top:1px solid var(--b1);font-size:10px;color:var(--t3);flex-shrink:0;}
+.sbar-dot{width:5px;height:5px;border-radius:50%;background:var(--green);}
+.sbar-dot.off{background:var(--t4);}
+.sbar-sep{width:1px;height:10px;background:var(--b2);}
+
+/* Scrollbars */
+::-webkit-scrollbar{width:4px;height:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--s4);border-radius:4px;}
+</style>
+</head>
+<body>
+
+<!-- ── SETUP SCREEN ── -->
+<div id="setup">
+<div class="sc">
+  <div class="s-logo"><div class="s-lm">&lt;/&gt;</div><div class="s-lt">Nexus Code</div></div>
+  <div class="s-tag">Collaborative IDE — write, run, and share code with your team in real time. Supports Python, C++, Java, Go, Bash, JS, Rust, and more.</div>
+
+  <div class="fl">
+    <label>Your Name</label>
+    <input class="fi" id="s-name" type="text" placeholder="e.g. Rohit" maxlength="30"/>
+  </div>
+  <div class="fl">
+    <label>Supabase URL <span style="color:var(--t4)">(for real-time sync + file saving)</span></label>
+    <input class="fi" id="s-url" type="text" placeholder="https://xxxxxxxxxxx.supabase.co"/>
+    <div class="hint">→ <a href="https://supabase.com" target="_blank">supabase.com</a> · New Project · Settings · API · Project URL</div>
+  </div>
+  <div class="fl">
+    <label>Supabase Anon Key</label>
+    <input class="fi" id="s-key" type="password" placeholder="eyJhbGci..."/>
+    <div class="hint">Same page · copy the <strong style="color:var(--t2)">anon / public</strong> key</div>
+  </div>
+  <div class="fl">
+    <label>Room / Workspace Name</label>
+    <input class="fi" id="s-room" type="text" placeholder="e.g. team-project" value="main"/>
+    <div class="hint">All teammates with the same room name share the same code</div>
+  </div>
+  <div class="fl" style="display:flex;gap:8px;margin-bottom:0;">
+    <div style="flex:1;">
+      <label>Skip Supabase?</label>
+      <div class="hint" style="margin-top:0;">Leave URL/Key empty to use local-only mode (no sync)</div>
+    </div>
+  </div>
+  <div id="s-err" class="err"></div>
+  <div class="sa">
+    <button class="btn btn-p" id="launchBtn" onclick="doLaunch()">Launch IDE →</button>
+  </div>
+</div>
+</div>
+
+<!-- ── TOAST ── -->
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<!-- ── INVITE MODAL ── -->
+<div class="modal-bg" id="invModal">
+<div class="modal">
+  <div class="modal-h">🔗 Invite to Workspace</div>
+  <div class="modal-sub">Anyone who opens this link joins your room instantly — they'll see and edit the same code.</div>
+  <div class="link-box"><span class="link-txt" id="invLink">—</span><button class="copy-btn" id="copyBtn" onclick="copyInvite()">Copy</button></div>
+  <div class="modal-note">⚠ This link encodes your Supabase credentials. Share only with trusted teammates. For production, set up Supabase RLS + auth.</div>
+  <div class="modal-foot"><button class="btn" onclick="closeModal('invModal')">Close</button></div>
+</div>
+</div>
+
+<!-- ── APP ── -->
+<div id="app">
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="tb-l">
+    <div class="logo-sm"><div class="lm-sm">&lt;/&gt;</div><div class="ln-sm">Nexus Code</div></div>
+    <div class="file-tabs" id="fileTabs"></div>
+    <button class="btn btn-sm" onclick="newFile()" style="font-size:11px;padding:4px 9px;">+ New</button>
+  </div>
+  <div class="tb-r">
+    <div class="members-row" id="membersRow"></div>
+    <button class="btn btn-sm" onclick="openInvite()">＋ Invite</button>
+    <button class="btn btn-sm" onclick="saveAllFiles()" title="Save all">💾 Save</button>
+  </div>
+</div>
+
+<!-- WORKSPACE -->
+<div class="workspace">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sb-section">
+      <div class="sb-label">Files</div>
+      <div id="sideFiles"></div>
+    </div>
+    <div class="sb-new">
+      <select class="lang-pick" id="newLangPick">
+        <option value="python">Python</option>
+        <option value="javascript">JavaScript</option>
+        <option value="cpp">C++</option>
+        <option value="java">Java</option>
+        <option value="go">Go</option>
+        <option value="bash">Bash</option>
+        <option value="rust">Rust</option>
+        <option value="c">C</option>
+        <option value="typescript">TypeScript</option>
+        <option value="ruby">Ruby</option>
+        <option value="php">PHP</option>
+        <option value="swift">Swift</option>
+      </select>
+      <button class="btn btn-sm btn-p" onclick="newFile()" style="padding:5px 9px;">+</button>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Team</div>
+      <div id="sbMembers"></div>
+    </div>
+  </div>
+
+  <!-- EDITOR AREA -->
+  <div class="editor-wrap">
+    <!-- Toolbar -->
+    <div class="editor-toolbar">
+      <div class="et-left">
+        <div class="lang-badge" id="langBadge">
+          <span class="lang-dot" id="langDot"></span>
+          <span id="langName">Python</span>
+        </div>
+        <button class="format-btn" onclick="formatCode()">⚡ Format</button>
+        <button class="format-btn" onclick="toggleTheme()">☀ Theme</button>
+      </div>
+      <div class="et-right">
+        <span style="font-size:11px;color:var(--t3);" id="cursorPos">Ln 1, Col 1</span>
+        <button class="run-btn" id="runBtn" onclick="runCode()">▶ Run</button>
+      </div>
+    </div>
+
+    <!-- Editor -->
+    <div class="editor-container" id="editorContainer">
+      <div class="line-nums" id="lineNums"><div class="ln">1</div></div>
+      <div class="code-area">
+        <div id="codeHighlight" aria-hidden="true"></div>
+        <textarea id="codeInput" spellcheck="false" autocorrect="off" autocapitalize="off"
+          placeholder="// Start coding here..."
+          oninput="onCodeInput()" onkeydown="onKeyDown(event)"
+          onkeyup="updateCursor()" onclick="updateCursor()" onscroll="syncScroll()"></textarea>
+        <div id="autocomplete"></div>
+      </div>
+    </div>
+
+    <!-- Output resize handle -->
+    <div class="resize-handle" id="resizeHandle"></div>
+
+    <!-- Output panel -->
+    <div class="output-panel" id="outputPanel">
+      <div class="op-header">
+        <div class="op-title">
+          <div class="op-status" id="opStatus"></div>
+          <span id="opTitle">Output</span>
+        </div>
+        <div class="op-actions">
+          <button class="btn btn-sm" onclick="clearOutput()">Clear</button>
+          <button class="btn btn-sm" onclick="copyOutput()">Copy</button>
+        </div>
+      </div>
+      <div class="op-body" id="opBody">
+        <div class="op-line info">// Press ▶ Run to execute your code</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- STATUS BAR -->
+<div class="statusbar">
+  <span class="sbar-dot" id="sbDot"></span>
+  <span id="sbConn">Local mode</span>
+  <span class="sbar-sep"></span>
+  <span id="sbRoom">—</span>
+  <span class="sbar-sep"></span>
+  <span id="sbLang">Python</span>
+  <span class="sbar-sep"></span>
+  <span id="sbCursors">1 user</span>
+  <span style="margin-left:auto;" id="sbSaved">Unsaved</span>
+</div>
+
+</div><!-- /#app -->
+
+<script>
+// ── LANGUAGE CONFIG ──
+const LANGS = {
+  python:     {name:'Python',    color:'#3572A5', ext:'.py',   hello:'print("Hello, World!")\n\nname = input("Enter name: ")\nprint(f"Hello, {name}!")'},
+  javascript: {name:'JS',        color:'#f7df1e', ext:'.js',   hello:'console.log("Hello, World!");\n\nconst greet = name => `Hello, ${name}!`;\nconsole.log(greet("Nexus"));'},
+  typescript: {name:'TypeScript',color:'#3178c6', ext:'.ts',   hello:'const greet = (name: string): string => `Hello, ${name}!`;\nconsole.log(greet("World"));'},
+  cpp:        {name:'C++',       color:'#f34b7d', ext:'.cpp',  hello:'#include <iostream>\nusing namespace std;\n\nint main() {\n  cout << "Hello, World!" << endl;\n  return 0;\n}'},
+  c:          {name:'C',         color:'#555555', ext:'.c',    hello:'#include <stdio.h>\n\nint main() {\n  printf("Hello, World!\\n");\n  return 0;\n}'},
+  java:       {name:'Java',      color:'#b07219', ext:'.java', hello:'public class Main {\n  public static void main(String[] args) {\n    System.out.println("Hello, World!");\n  }\n}'},
+  go:         {name:'Go',        color:'#00ADD8', ext:'.go',   hello:'package main\n\nimport "fmt"\n\nfunc main() {\n  fmt.Println("Hello, World!")\n}'},
+  bash:       {name:'Bash',      color:'#89e051', ext:'.sh',   hello:'#!/bin/bash\necho "Hello, World!"\n\nread -p "Enter name: " name\necho "Hello, $name!"'},
+  rust:       {name:'Rust',      color:'#dea584', ext:'.rs',   hello:'fn main() {\n  println!("Hello, World!");\n  let greeting = |name: &str| format!("Hello, {}!", name);\n  println!("{}", greeting("Nexus"));\n}'},
+  ruby:       {name:'Ruby',      color:'#701516', ext:'.rb',   hello:'puts "Hello, World!"\n\ndef greet(name)\n  "Hello, #{name}!"\nend\n\nputs greet("Nexus")'},
+  php:        {name:'PHP',       color:'#4F5D95', ext:'.php',  hello:'<?php\necho "Hello, World!\\n";\n\n$greet = fn($name) => "Hello, $name!";\necho $greet("Nexus");'},
+  swift:      {name:'Swift',     color:'#F05138', ext:'.swift',hello:'import Foundation\n\nprint("Hello, World!")\n\nfunc greet(_ name: String) -> String {\n  return "Hello, \\(name)!"\n}\nprint(greet("Nexus"))'},
+};
+
+// ── AUTOCOMPLETE KEYWORDS ──
+const AC = {
+  python:['print','input','len','range','int','str','float','list','dict','tuple','set','if','else','elif','for','while','def','class','return','import','from','as','with','try','except','finally','lambda','yield','pass','break','continue','True','False','None','and','or','not','in','is','open','append','extend','pop','remove','sort','sorted','map','filter','zip','enumerate','type','isinstance','hasattr','getattr','setattr'],
+  javascript:['console.log','console.error','function','const','let','var','return','if','else','for','while','class','import','export','default','async','await','Promise','then','catch','finally','new','this','typeof','instanceof','Array','Object','String','Number','Boolean','JSON','Math','Date','setTimeout','setInterval','document','window','fetch','map','filter','reduce','forEach','find','push','pop','shift','unshift','splice','slice','join','split','includes','indexOf'],
+  cpp:['cout','cin','endl','#include','using','namespace','std','int','float','double','char','bool','void','string','vector','map','pair','auto','return','if','else','for','while','class','struct','public','private','protected','virtual','override','nullptr','true','false','template','typename'],
+  java:['System.out.println','System.out.print','public','private','protected','static','void','int','double','float','char','boolean','String','class','interface','extends','implements','new','return','if','else','for','while','switch','case','break','continue','import','package','try','catch','finally','throw','throws','ArrayList','HashMap','List','Map'],
+  go:['fmt.Println','fmt.Printf','fmt.Sprintf','func','var','const','type','struct','interface','map','slice','chan','go','defer','select','range','return','if','else','for','switch','case','break','continue','import','package','make','append','len','cap','close','copy','delete','new','panic','recover','error','nil','true','false'],
+  bash:['echo','read','if','then','else','fi','for','while','do','done','case','esac','function','return','exit','export','local','declare','printf','grep','sed','awk','cat','ls','cd','pwd','mkdir','rm','cp','mv','chmod','chown','pipe','source','$?','$0','$1','$#','$@'],
+  rust:['println!','print!','fn','let','mut','const','struct','enum','impl','trait','use','mod','pub','return','if','else','for','while','loop','match','break','continue','Vec','String','HashMap','Option','Result','Some','None','Ok','Err','Box','Arc','Rc','move','clone','unwrap','expect'],
+};
+
+// ── STATE ──
+let sb = null, sbChannel = null;
+let files = {}, activeFile = null;
+let members = {}, myName='You', myColor='#3d8ef0', roomName='main';
+let lightTheme = false;
+let acIndex = 0, acItems = [], acWord = '';
+let outputHeight = 200;
+
+const MEMBER_COLORS = ['#3d8ef0','#2ecc71','#e74c3c','#f39c12','#9b59b6','#1abc9c','#e67e22','#e91e63'];
+
+// ── LAUNCH ──
+async function doLaunch() {
+  const name = document.getElementById('s-name').value.trim();
+  const url  = document.getElementById('s-url').value.trim();
+  const key  = document.getElementById('s-key').value.trim();
+  const room = document.getElementById('s-room').value.trim() || 'main';
+  if (!name) return showErr('Please enter your name.');
+  myName = name;
+  roomName = room;
+  myColor = MEMBER_COLORS[name.charCodeAt(0) % MEMBER_COLORS.length];
+
+  const btn = document.getElementById('launchBtn');
+  btn.disabled = true; btn.textContent = 'Launching...';
+
+  if (url && key) {
+    try {
+      sb = window.supabase.createClient(url, key);
+      // Test connection using storage API (works with both old anon and new publishable keys)
+      try { await sb.storage.listBuckets(); } catch(_) {}
+      localStorage.setItem('nx_cfg', JSON.stringify({url, key, room}));
+      setupRealtime();
+      document.getElementById('sbDot').classList.remove('off');
+      document.getElementById('sbConn').textContent = 'Connected · Supabase';
+      document.getElementById('sbRoom').textContent = 'Room: ' + room;
+    } catch(e) {
+      showErr('Supabase error: ' + e.message);
+      btn.disabled = false; btn.textContent = 'Launch IDE →'; return;
+    }
+  } else {
+    document.getElementById('sbConn').textContent = 'Local only (no sync)';
+    document.getElementById('sbRoom').textContent = 'Room: local';
+  }
+
+  localStorage.setItem('nx_name', name);
+  document.getElementById('setup').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('app').style.flexDirection = 'column';
+  document.getElementById('app').style.height = '100%';
+
+  // Init with default python file
+  createFile('main.py', 'python', LANGS.python.hello);
+  updateMemberUI();
+  initResize();
+}
+
+// ── AUTO-RESTORE ──
+window.addEventListener('DOMContentLoaded', () => {
+  const p = new URLSearchParams(window.location.search);
+  const u = p.get('u'), k = p.get('k'), r = p.get('r'), n = p.get('n');
+  if (u && k) {
+    document.getElementById('s-url').value = atob(u);
+    document.getElementById('s-key').value = atob(k);
+    if (r) document.getElementById('s-room').value = r;
+    showToast('🔗 Invite link — enter your name to join');
+  }
+  const cfg = localStorage.getItem('nx_cfg');
+  const savedName = localStorage.getItem('nx_name');
+  if (cfg) { const c = JSON.parse(cfg); document.getElementById('s-url').value=c.url||''; document.getElementById('s-key').value=c.key||''; document.getElementById('s-room').value=c.room||'main'; }
+  if (savedName) document.getElementById('s-name').value = savedName;
+});
+
+// ── REALTIME SUPABASE ──
+function setupRealtime() {
+  if (!sb) return;
+  sbChannel = sb.channel('room:' + roomName, { config: { broadcast: { self: false } } });
+  sbChannel
+    .on('broadcast', { event: 'code' }, ({ payload }) => {
+      if (payload.file && files[payload.file]) {
+        files[payload.file].code = payload.code;
+        if (activeFile === payload.file) {
+          const ci = document.getElementById('codeInput');
+          const pos = ci.selectionStart;
+          ci.value = payload.code;
+          ci.setSelectionRange(pos, pos);
+          highlight();
+          updateLineNums();
+        }
+      }
+    })
+    .on('broadcast', { event: 'presence' }, ({ payload }) => {
+      members[payload.id] = { name: payload.name, color: payload.color, ts: Date.now() };
+      updateMemberUI();
+    })
+    .subscribe();
+
+  // Announce presence
+  setInterval(() => {
+    if (sbChannel) sbChannel.send({ type:'broadcast', event:'presence', payload:{ id: myName, name: myName, color: myColor } });
+  }, 5000);
+  sbChannel.send({ type:'broadcast', event:'presence', payload:{ id: myName, name: myName, color: myColor } });
+
+  // Load saved code from Supabase DB if available
+  loadRemoteCode();
+}
+
+async function loadRemoteCode() {
+  if (!sb) return;
+  try {
+    const { data } = await sb.from('nexus_files').select('*').eq('room', roomName);
+    if (data && data.length) {
+      data.forEach(row => {
+        if (files[row.name]) {
+          files[row.name].code = row.code;
+          if (activeFile === row.name) {
+            document.getElementById('codeInput').value = row.code;
+            highlight(); updateLineNums();
+          }
+        } else {
+          createFile(row.name, row.lang || 'python', row.code, true);
+        }
+      });
+      showToast('📂 Loaded ' + data.length + ' saved file(s)');
+    }
+  } catch(e) { /* table might not exist yet, that's ok */ }
+}
+
+async function saveAllFiles() {
+  if (!sb) { showToast('Local mode — no remote save'); return; }
+  try {
+    for (const [name, f] of Object.entries(files)) {
+      await sb.from('nexus_files').upsert({ name, room: roomName, lang: f.lang, code: f.code, updated_at: new Date().toISOString() }, { onConflict: 'name,room' });
+    }
+    document.getElementById('sbSaved').textContent = 'Saved ' + new Date().toLocaleTimeString();
+    showToast('💾 All files saved to cloud');
+  } catch(e) {
+    showToast('⚠ Save failed — create nexus_files table in Supabase');
+  }
+}
+
+function broadcastCode(filename, code) {
+  if (!sbChannel) return;
+  sbChannel.send({ type:'broadcast', event:'code', payload:{ file: filename, code, author: myName } });
+}
+
+// ── FILES ──
+let fileCounter = 0;
+function createFile(name, lang, code='', silent=false) {
+  if (!name) {
+    const l = document.getElementById('newLangPick').value;
+    lang = l;
+    name = 'file' + (++fileCounter) + LANGS[l].ext;
+    code = LANGS[l].hello;
+  }
+  if (!lang) lang = 'python';
+  files[name] = { lang, code };
+  renderFileTabs();
+  renderSideFiles();
+  setActiveFile(name);
+  if (!silent) showToast('📄 Created ' + name);
+}
+
+function newFile() { createFile(null, null, null); }
+
+function setActiveFile(name) {
+  activeFile = name;
+  const f = files[name];
+  document.getElementById('codeInput').value = f.code;
+  const li = LANGS[f.lang] || LANGS.python;
+  document.getElementById('langName').textContent = li.name;
+  document.getElementById('langDot').style.background = li.color;
+  document.getElementById('sbLang').textContent = li.name;
+  renderFileTabs();
+  renderSideFiles();
+  highlight();
+  updateLineNums();
+  updateCursor();
+}
+
+function closeFile(name, e) {
+  e.stopPropagation();
+  delete files[name];
+  const keys = Object.keys(files);
+  if (!keys.length) createFile('main.py','python',LANGS.python.hello, true);
+  else setActiveFile(keys[keys.length-1]);
+  renderFileTabs();
+  renderSideFiles();
+}
+
+function renderFileTabs() {
+  const ft = document.getElementById('fileTabs');
+  ft.innerHTML = Object.keys(files).map(name => {
+    const f = files[name];
+    const li = LANGS[f.lang] || LANGS.python;
+    const active = name === activeFile ? 'active' : '';
+    return `<div class="ftab ${active}" onclick="setActiveFile('${esc(name)}')">
+      <span class="lang-dot" style="background:${li.color}"></span>
+      <span>${esc(name)}</span>
+      <span class="fx" onclick="closeFile('${esc(name)}',event)">✕</span>
+    </div>`;
+  }).join('');
+}
+
+function renderSideFiles() {
+  const sf = document.getElementById('sideFiles');
+  sf.innerHTML = Object.keys(files).map(name => {
+    const f = files[name];
+    const li = LANGS[f.lang] || LANGS.python;
+    const active = name === activeFile ? 'active' : '';
+    return `<div class="sb-item ${active}" onclick="setActiveFile('${esc(name)}')">
+      <span class="lang-dot" style="background:${li.color}"></span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── CODE INPUT ──
+function onCodeInput() {
+  const ci = document.getElementById('codeInput');
+  const code = ci.value;
+  if (activeFile) {
+    files[activeFile].code = code;
+    broadcastCode(activeFile, code);
+  }
+  highlight();
+  updateLineNums();
+  updateCursor();
+  showAutocomplete(ci);
+  document.getElementById('sbSaved').textContent = '● Unsaved';
+}
+
+function onKeyDown(e) {
+  const ci = document.getElementById('codeInput');
+  const ac = document.getElementById('autocomplete');
+
+  // Autocomplete navigation
+  if (ac.style.display === 'block') {
+    if (e.key === 'ArrowDown') { e.preventDefault(); acIndex = Math.min(acIndex+1, acItems.length-1); renderAC(); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); acIndex = Math.max(acIndex-1, 0); renderAC(); return; }
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      if (acItems.length) { e.preventDefault(); applyAC(acItems[acIndex]); return; }
+    }
+    if (e.key === 'Escape') { ac.style.display='none'; return; }
+  }
+
+  // Tab = 2 spaces
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const s = ci.selectionStart, end = ci.selectionEnd;
+    ci.value = ci.value.substring(0,s) + '  ' + ci.value.substring(end);
+    ci.selectionStart = ci.selectionEnd = s+2;
+    onCodeInput(); return;
+  }
+
+  // Auto-close brackets
+  const pairs = {'(':')','{':'}','[':']','"':'"',"'":"'",'`':'`'};
+  if (pairs[e.key]) {
+    e.preventDefault();
+    const s = ci.selectionStart, end = ci.selectionEnd;
+    const sel = ci.value.substring(s, end);
+    ci.value = ci.value.substring(0,s) + e.key + sel + pairs[e.key] + ci.value.substring(end);
+    ci.selectionStart = ci.selectionEnd = s+1;
+    onCodeInput(); return;
+  }
+
+  // Enter — auto-indent
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const s = ci.selectionStart;
+    const lines = ci.value.substring(0,s).split('\n');
+    const lastLine = lines[lines.length-1];
+    const indent = lastLine.match(/^(\s*)/)[1];
+    const extraIndent = /[{(:\[]\s*$/.test(lastLine.trimEnd()) ? '  ' : '';
+    const ins = '\n' + indent + extraIndent;
+    ci.value = ci.value.substring(0,s) + ins + ci.value.substring(ci.selectionEnd);
+    ci.selectionStart = ci.selectionEnd = s + ins.length;
+    onCodeInput(); return;
+  }
+}
+
+// ── SYNTAX HIGHLIGHT ──
+function highlight() {
+  const ci = document.getElementById('codeInput');
+  const hl = document.getElementById('codeHighlight');
+  if (!activeFile) return;
+  const lang = files[activeFile]?.lang || 'python';
+  hl.innerHTML = applyHighlight(ci.value, lang);
+}
+
+function applyHighlight(code, lang) {
+  let h = escHtml(code);
+
+  // Comments
+  if (lang === 'python') h = h.replace(/(#[^\n]*)/g, '<span class="cmt">$1</span>');
+  else if (['cpp','c','java','go','javascript','typescript','rust','swift','php'].includes(lang))
+    h = h.replace(/(\/\/[^\n]*)|(\/\*[\s\S]*?\*\/)/g, '<span class="cmt">$1$2</span>');
+  else if (lang === 'bash') h = h.replace(/(#[^\n]*)/g, '<span class="cmt">$1</span>');
+
+  // Strings
+  h = h.replace(/(&quot;(?:[^&]|&(?!quot;))*?&quot;)/g, '<span class="str">$1</span>');
+  h = h.replace(/(&#39;(?:[^&]|&(?!#39;))*?&#39;)/g, '<span class="str">$1</span>');
+  h = h.replace(/(&#96;[^&#]*?&#96;)/g, '<span class="str">$1</span>');
+
+  // Numbers
+  h = h.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
+
+  // Keywords by language
+  const kws = {
+    python: /\b(def|class|if|elif|else|for|while|return|import|from|as|with|try|except|finally|lambda|yield|pass|break|continue|in|is|not|and|or|True|False|None|async|await|global|nonlocal|raise|del|assert)\b/g,
+    javascript: /\b(function|const|let|var|return|if|else|for|while|class|import|export|default|async|await|new|this|typeof|instanceof|true|false|null|undefined|switch|case|break|continue|throw|try|catch|finally|of|in|do|delete|void)\b/g,
+    typescript: /\b(function|const|let|var|return|if|else|for|while|class|import|export|default|async|await|new|this|typeof|instanceof|true|false|null|undefined|switch|case|break|continue|throw|try|catch|finally|interface|type|enum|namespace|declare|implements|extends|abstract|public|private|protected|readonly|string|number|boolean|any|void|never)\b/g,
+    cpp: /\b(int|float|double|char|bool|void|auto|const|static|if|else|for|while|do|return|class|struct|public|private|protected|namespace|using|include|new|delete|nullptr|true|false|template|typename|virtual|override|inline|switch|case|break|continue|enum|typedef)\b/g,
+    c: /\b(int|float|double|char|void|const|static|if|else|for|while|do|return|struct|typedef|enum|switch|case|break|continue|sizeof|NULL|include|define)\b/g,
+    java: /\b(public|private|protected|static|void|int|double|float|char|boolean|String|class|interface|extends|implements|new|return|if|else|for|while|switch|case|break|continue|import|package|try|catch|finally|throw|throws|null|true|false|this|super|abstract|final|synchronized|volatile)\b/g,
+    go: /\b(func|var|const|type|struct|interface|map|chan|go|defer|select|range|return|if|else|for|switch|case|break|continue|import|package|make|append|len|cap|close|copy|delete|new|nil|true|false|error|iota|fallthrough)\b/g,
+    bash: /\b(if|then|else|elif|fi|for|while|do|done|case|esac|function|return|exit|in|source|export|local|declare|read|echo|printf)\b/g,
+    rust: /\b(fn|let|mut|const|struct|enum|impl|trait|use|mod|pub|return|if|else|for|while|loop|match|break|continue|move|where|type|unsafe|async|await|dyn|box|ref|self|super|crate|true|false|None|Some|Ok|Err)\b/g,
+    ruby: /\b(def|class|module|if|elsif|else|unless|while|until|for|do|end|return|require|include|extend|new|self|true|false|nil|and|or|not|in|begin|rescue|ensure|raise|yield|lambda|proc)\b/g,
+    php: /\b(function|class|if|else|elseif|while|for|foreach|return|echo|print|new|this|public|private|protected|static|namespace|use|require|include|try|catch|finally|throw|true|false|null|array|string|int|float|bool)\b/g,
+    swift: /\b(func|var|let|class|struct|enum|protocol|extension|if|else|guard|for|while|switch|case|return|import|init|self|super|true|false|nil|throws|throw|try|catch|async|await|override|final|public|private|internal|weak|lazy|in|where)\b/g,
+  };
+  if (kws[lang]) h = h.replace(kws[lang], '<span class="kw">$1</span>');
+
+  // Function calls
+  h = h.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=\()/g, '<span class="fn">$1</span>');
+
+  // Types (capitalized)
+  h = h.replace(/\b([A-Z][a-zA-Z0-9_]*)\b/g, '<span class="typ">$1</span>');
+
+  return h;
+}
+
+function syncScroll() {
+  const ci = document.getElementById('codeInput');
+  const hl = document.getElementById('codeHighlight');
+  const ln = document.getElementById('lineNums');
+  hl.scrollTop = ci.scrollTop;
+  hl.scrollLeft = ci.scrollLeft;
+  ln.scrollTop = ci.scrollTop;
+}
+
+function updateLineNums() {
+  const ci = document.getElementById('codeInput');
+  const lines = ci.value.split('\n').length;
+  const ln = document.getElementById('lineNums');
+  ln.innerHTML = Array.from({length:lines},(_,i)=>`<div class="ln">${i+1}</div>`).join('');
+  ln.scrollTop = ci.scrollTop;
+}
+
+function updateCursor() {
+  const ci = document.getElementById('codeInput');
+  const text = ci.value.substring(0, ci.selectionStart);
+  const lines = text.split('\n');
+  const ln = lines.length, col = lines[lines.length-1].length + 1;
+  document.getElementById('cursorPos').textContent = `Ln ${ln}, Col ${col}`;
+}
+
+// ── AUTOCOMPLETE ──
+function showAutocomplete(ci) {
+  const ac = document.getElementById('autocomplete');
+  if (!activeFile) return;
+  const lang = files[activeFile]?.lang || 'python';
+  const keywords = AC[lang] || [];
+  const pos = ci.selectionStart;
+  const text = ci.value.substring(0, pos);
+  const match = text.match(/[\w.]+$/);
+  if (!match || match[0].length < 2) { ac.style.display='none'; return; }
+  acWord = match[0];
+  acItems = keywords.filter(k => k.startsWith(acWord) && k !== acWord).slice(0, 10);
+  if (!acItems.length) { ac.style.display='none'; return; }
+  acIndex = 0;
+  // Position dropdown
+  const { lineH, charW } = { lineH: 22.1, charW: 7.8 };
+  const lines = text.split('\n');
+  const curLine = lines.length - 1;
+  const curCol = lines[curLine].length;
+  ac.style.top = ((curLine + 1) * lineH + 14) + 'px';
+  ac.style.left = Math.min(curCol * charW + 16, 400) + 'px';
+  ac.style.display = 'block';
+  renderAC();
+}
+
+function renderAC() {
+  const ac = document.getElementById('autocomplete');
+  ac.innerHTML = acItems.map((item,i) => {
+    const kind = item.includes('.') ? 'method' : item[0] === item[0].toUpperCase() && item[0].match(/[A-Z]/) ? 'class' : 'keyword';
+    return `<div class="ac-item ${i===acIndex?'sel':''}" onmousedown="applyAC('${esc(item)}')">${item} <span class="ac-kind">${kind}</span></div>`;
+  }).join('');
+}
+
+function applyAC(word) {
+  const ci = document.getElementById('codeInput');
+  const pos = ci.selectionStart;
+  const before = ci.value.substring(0, pos);
+  const after = ci.value.substring(pos);
+  const newBefore = before.replace(/[\w.]+$/, word);
+  ci.value = newBefore + after;
+  ci.selectionStart = ci.selectionEnd = newBefore.length;
+  document.getElementById('autocomplete').style.display = 'none';
+  onCodeInput();
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#autocomplete')) document.getElementById('autocomplete').style.display = 'none';
+});
+
+// ── RUN CODE (Piston API — free, no key needed) ──
+const PISTON = {
+  python:     { language:'python',     version:'3.10.0' },
+  javascript: { language:'javascript', version:'18.15.0' },
+  typescript: { language:'typescript', version:'5.0.3' },
+  cpp:        { language:'c++',        version:'10.2.0' },
+  c:          { language:'c',          version:'10.2.0' },
+  java:       { language:'java',       version:'15.0.2' },
+  go:         { language:'go',         version:'1.16.2' },
+  bash:       { language:'bash',       version:'5.2.0' },
+  rust:       { language:'rust',       version:'1.50.0' },
+  ruby:       { language:'ruby',       version:'3.0.1' },
+  php:        { language:'php',        version:'8.2.3' },
+  swift:      { language:'swift',      version:'5.3.3' },
+};
+
+async function runCode() {
+  if (!activeFile) return;
+  const f = files[activeFile];
+  const code = document.getElementById('codeInput').value;
+  const config = PISTON[f.lang];
+  const btn = document.getElementById('runBtn');
+  const opStatus = document.getElementById('opStatus');
+  const opTitle = document.getElementById('opTitle');
+  const opBody = document.getElementById('opBody');
+
+  if (!config) { appendOutput('⚠ Language not supported for execution', 'stderr'); return; }
+
+  btn.disabled = true; btn.className = 'run-btn running'; btn.textContent = '⏳ Running...';
+  opStatus.className = 'op-status run'; opTitle.textContent = 'Running ' + LANGS[f.lang].name + '...';
+  opBody.innerHTML = `<div class="op-line sys">▶ Executing ${activeFile}...</div>`;
+
+  try {
+    const res = await fetch('https://emkc.org/api/v2/piston/execute', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        language: config.language,
+        version: config.version,
+        files: [{ name: activeFile, content: code }],
+        stdin: ''
+      })
+    });
+    const data = await res.json();
+    const run = data.run || {};
+    const compile = data.compile || {};
+
+    opBody.innerHTML = '';
+    if (compile.stderr) appendOutput(compile.stderr, 'stderr');
+    if (compile.output) appendOutput(compile.output, 'stdout');
+    if (run.stdout) run.stdout.split('\n').forEach(l => appendOutput(l, 'stdout'));
+    if (run.stderr) run.stderr.split('\n').forEach(l => appendOutput(l, 'stderr'));
+    if (!run.stdout && !run.stderr && !compile.stderr) appendOutput('(no output)', 'info');
+
+    const ok = !run.stderr && !compile.stderr;
+    opStatus.className = 'op-status ' + (ok ? 'ok' : 'err');
+    opTitle.textContent = ok ? '✓ Completed' : '✗ Error';
+    if (run.code !== undefined) appendOutput(`\nExit code: ${run.code}`, 'info');
+  } catch(e) {
+    appendOutput('Network error: ' + e.message + '\n(Check internet connection — uses Piston API)', 'stderr');
+    opStatus.className = 'op-status err';
+    opTitle.textContent = '✗ Failed';
+  }
+
+  btn.disabled = false; btn.className = 'run-btn'; btn.textContent = '▶ Run';
+}
+
+function appendOutput(text, type='stdout') {
+  const ob = document.getElementById('opBody');
+  const d = document.createElement('div');
+  d.className = 'op-line ' + type;
+  d.textContent = text;
+  ob.appendChild(d);
+  ob.scrollTop = ob.scrollHeight;
+}
+
+function clearOutput() {
+  document.getElementById('opBody').innerHTML = '<div class="op-line info">// Output cleared</div>';
+  document.getElementById('opStatus').className = 'op-status';
+  document.getElementById('opTitle').textContent = 'Output';
+}
+
+async function copyOutput() {
+  const text = [...document.querySelectorAll('.op-line')].map(d=>d.textContent).join('\n');
+  await navigator.clipboard.writeText(text);
+  showToast('Output copied');
+}
+
+// ── FORMAT CODE ──
+function formatCode() {
+  if (!activeFile) return;
+  const ci = document.getElementById('codeInput');
+  let code = ci.value;
+  const lang = files[activeFile].lang;
+
+  // Basic formatting: consistent indentation, trailing whitespace removal
+  const lines = code.split('\n');
+  const formatted = lines.map(l => l.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n');
+  ci.value = formatted;
+  files[activeFile].code = formatted;
+  highlight(); updateLineNums();
+  showToast('⚡ Formatted');
+}
+
+// ── THEME ──
+function toggleTheme() {
+  lightTheme = !lightTheme;
+  if (lightTheme) {
+    document.documentElement.style.setProperty('--bg','#f5f6f8');
+    document.documentElement.style.setProperty('--s1','#ffffff');
+    document.documentElement.style.setProperty('--s2','#f0f1f3');
+    document.documentElement.style.setProperty('--s3','#e5e7eb');
+    document.documentElement.style.setProperty('--s4','#d1d5db');
+    document.documentElement.style.setProperty('--t1','#1a1a2e');
+    document.documentElement.style.setProperty('--t2','#4a5568');
+    document.documentElement.style.setProperty('--t3','#9ca3af');
+    document.documentElement.style.setProperty('--t4','#d1d5db');
+    document.documentElement.style.setProperty('--b1','rgba(0,0,0,0.07)');
+    document.documentElement.style.setProperty('--b2','rgba(0,0,0,0.12)');
+    document.documentElement.style.setProperty('--b3','rgba(0,0,0,0.2)');
+  } else {
+    document.documentElement.style.setProperty('--bg','#080b10');
+    document.documentElement.style.setProperty('--s1','#0e1117');
+    document.documentElement.style.setProperty('--s2','#141920');
+    document.documentElement.style.setProperty('--s3','#1c2330');
+    document.documentElement.style.setProperty('--s4','#222d3d');
+    document.documentElement.style.setProperty('--t1','#e8edf5');
+    document.documentElement.style.setProperty('--t2','#8a95a8');
+    document.documentElement.style.setProperty('--t3','#4a5568');
+    document.documentElement.style.setProperty('--t4','#2d3748');
+    document.documentElement.style.setProperty('--b1','rgba(255,255,255,0.05)');
+    document.documentElement.style.setProperty('--b2','rgba(255,255,255,0.09)');
+    document.documentElement.style.setProperty('--b3','rgba(255,255,255,0.16)');
+  }
+  highlight();
+}
+
+// ── INVITE ──
+function openInvite() {
+  const cfg = JSON.parse(localStorage.getItem('nx_cfg') || '{}');
+  const base = window.location.href.split('?')[0];
+  let link = base;
+  if (cfg.url && cfg.key) {
+    link = `${base}?u=${btoa(cfg.url)}&k=${btoa(cfg.key)}&r=${roomName}&n=1`;
+  } else {
+    link = base + '?r=' + roomName + '&n=1';
+  }
+  document.getElementById('invLink').textContent = link;
+  document.getElementById('invModal').classList.add('open');
+}
+
+async function copyInvite() {
+  await navigator.clipboard.writeText(document.getElementById('invLink').textContent);
+  const btn = document.getElementById('copyBtn');
+  btn.textContent = 'Copied!'; btn.classList.add('ok');
+  setTimeout(() => { btn.textContent='Copy'; btn.classList.remove('ok'); }, 2000);
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+// ── MEMBERS ──
+function updateMemberUI() {
+  const all = [{ name: myName, color: myColor }, ...Object.values(members)];
+  const uniq = [...new Map(all.map(m => [m.name, m])).values()];
+
+  document.getElementById('membersRow').innerHTML = uniq.slice(0,5).map(m => {
+    const bg = m.color + '22';
+    return `<div class="mav" title="${esc(m.name)}" style="background:${bg};color:${m.color}">${m.name.slice(0,2).toUpperCase()}</div>`;
+  }).join('');
+
+  document.getElementById('sbCursors').textContent = uniq.length + ' user' + (uniq.length!==1?'s':'');
+
+  document.getElementById('sbMembers').innerHTML = uniq.map(m => {
+    const bg = m.color + '22';
+    return `<div class="sb-item" style="cursor:default;">
+      <div style="width:20px;height:20px;border-radius:50%;background:${bg};color:${m.color};display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;flex-shrink:0;">${m.name.slice(0,2).toUpperCase()}</div>
+      <span>${esc(m.name)}${m.name===myName?' (you)':''}</span>
+      <span class="online-dot" style="margin-left:auto;"></span>
+    </div>`;
+  }).join('');
+
+  // Prune stale members (>15s no heartbeat)
+  const now = Date.now();
+  Object.keys(members).forEach(k => { if (now - members[k].ts > 15000) delete members[k]; });
+}
+
+// ── OUTPUT RESIZE ──
+function initResize() {
+  const handle = document.getElementById('resizeHandle');
+  let startY, startH;
+  handle.addEventListener('mousedown', e => {
+    startY = e.clientY;
+    startH = document.getElementById('outputPanel').offsetHeight;
+    const onMove = ev => {
+      const delta = startY - ev.clientY;
+      const newH = Math.max(60, Math.min(500, startH + delta));
+      document.getElementById('outputPanel').style.height = newH + 'px';
+    };
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// ── HELPERS ──
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/`/g,'&#96;');
+}
+function esc(s) { return String(s).replace(/'/g,"\\'"); }
+
+let toastTimer;
+function showToast(msg, dur=2200) {
+  document.getElementById('toastMsg').textContent = msg;
+  document.getElementById('toast').classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => document.getElementById('toast').classList.remove('show'), dur);
+}
+function showErr(msg) {
+  const el = document.getElementById('s-err');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+// Auto-save every 30s
+setInterval(() => { if (sb && activeFile) saveAllFiles(); }, 30000);
+</script>
+</body>
+</html>
