@@ -62,6 +62,7 @@ async fn session(
                                     name: f.name,
                                     lang: f.lang,
                                     code: f.code,
+                                    rev: f.rev,
                                 })
                                 .collect();
                             let _ = reader_ev.send(Ev::Loaded { files });

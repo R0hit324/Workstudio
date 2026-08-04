@@ -12,10 +12,11 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 use super::protocol::{
-    LinePatch, PatchMsg, Presence, SnapshotMsg, SnapReqMsg, WelcomeFile, Wire, EV_LOAD_REQ,
-    EV_PATCH, EV_PRESENCE, EV_SNAPSHOT, EV_SNAP_REQ,
+    PatchMsg, Presence, SnapshotMsg, SnapReqMsg, WelcomeFile, Wire, EV_LOAD_REQ, EV_PATCH,
+    EV_PRESENCE, EV_SNAPSHOT, EV_SNAP_REQ,
 };
 use super::{Cmd, Ev, StoredFile};
+use crate::patch::{apply_blocks, rebase_blocks};
 
 static NEXT_PEER: AtomicU64 = AtomicU64::new(1);
 
@@ -40,6 +41,18 @@ enum Incoming {
     Closed {
         peer: u64,
     },
+}
+
+/// What the hub should do with a successfully-applied patch.
+enum PatchOutcome {
+    /// Patch was applied to the store; broadcast `payload` so everyone converges.
+    /// `echo_sender` is true when it was a clean in-order apply (the sender can
+    /// consume its own patch to advance its canonical revision), false when it
+    /// was rebased (the sender is behind and needs a snapshot instead).
+    Applied { payload: Value, echo_sender: bool },
+    /// Patch could not be merged (overlapping concurrent edit or sender ahead):
+    /// drop it and resync the sender with a snapshot (last-write-wins).
+    SnapshotSender,
 }
 
 struct FileState {
@@ -124,37 +137,56 @@ impl Hub {
     fn handle_cmd(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::Send { event, payload } => {
-                self.track(&event, &payload);
+                if event == EV_PATCH {
+                    if let Ok(m) = serde_json::from_value::<PatchMsg>(payload) {
+                        match self.apply_patch_message(&m) {
+                            PatchOutcome::Applied { payload, .. } => {
+                                let wire = Wire::evt(EV_PATCH, payload);
+                                self.broadcast(&wire, None);
+                                let _ = self.ev_tx.send(Ev::Broadcast {
+                                    event: EV_PATCH.to_string(),
+                                    payload: wire.payload.clone().unwrap_or(Value::Null),
+                                });
+                            }
+                            PatchOutcome::SnapshotSender => {
+                                if let Some(snap) = self.build_snapshot(&m.file) {
+                                    let _ = self.ev_tx.send(Ev::Broadcast {
+                                        event: EV_SNAPSHOT.to_string(),
+                                        payload: snap,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
                 if event == EV_LOAD_REQ {
                     return;
                 }
-                let wire = Wire::evt(&event, payload);
-                self.broadcast(&wire, None);
                 if event == EV_SNAP_REQ {
-                    if let Ok(req) =
-                        serde_json::from_value::<SnapReqMsg>(wire.payload.clone().unwrap_or_default())
-                    {
+                    // The local editor asked for a snapshot: answer authoritatively
+                    // (to the room and to ourselves) so a lone joiner is never stuck.
+                    if let Ok(req) = serde_json::from_value::<SnapReqMsg>(payload.clone()) {
                         if let Some(snap) = self.build_snapshot(&req.file) {
-                            let w = Wire::evt(EV_SNAPSHOT, snap);
+                            let w = Wire::evt(EV_SNAPSHOT, snap.clone());
                             self.broadcast(&w, None);
+                            let _ = self.ev_tx.send(Ev::Broadcast {
+                                event: EV_SNAPSHOT.to_string(),
+                                payload: snap,
+                            });
                         }
                     }
+                    let wire = Wire::evt(&event, payload);
+                    self.broadcast(&wire, None);
+                    return;
                 }
+                self.track(&event, &payload);
+                let wire = Wire::evt(&event, payload);
+                self.broadcast(&wire, None);
             }
-            Cmd::SaveAll(files) => {
-                // Refresh store from what the app reported, then write to disk.
-                for f in files {
-                    let state = self.store.entry(f.name).or_insert_with(|| FileState {
-                        lang: f.lang.clone(),
-                        lines: Vec::new(),
-                        rev: 0,
-                    });
-                    state.lang = f.lang;
-                    state.lines = f.code.split('\n').map(|s| s.to_string()).collect();
-                    state.rev += 1;
-                }
+            Cmd::SaveAll(_files) => {
+                // The store is canonical: persist it, then commit as the owner.
                 self.persist();
-                // The host owns the workspace repo: commit as the session owner.
                 if crate::git::is_repo(&self.dir) {
                     let author = if self.cfg.name.trim().is_empty() {
                         "host".to_string()
@@ -188,21 +220,109 @@ impl Hub {
             self.send_to_peer(peer, &wire);
             return;
         }
+        if event == EV_PATCH {
+            if let Ok(m) = serde_json::from_value::<PatchMsg>(payload) {
+                match self.apply_patch_message(&m) {
+                    PatchOutcome::Applied { payload, echo_sender } => {
+                        let wire = Wire::evt(EV_PATCH, payload);
+                        if echo_sender {
+                            // Clean in-order apply: every receiver (incl. sender) can
+                            // apply it against its matching base revision.
+                            self.broadcast(&wire, None);
+                        } else {
+                            // Rebased apply: the sender is behind and cannot apply the
+                            // transformed patch itself — resync it with a snapshot.
+                            self.broadcast(&wire, Some(peer));
+                            if let Some(snap) = self.build_snapshot(&m.file) {
+                                let w = Wire::evt(EV_SNAPSHOT, snap);
+                                self.send_to_peer(peer, &w);
+                            }
+                        }
+                        let _ = self.ev_tx.send(Ev::Broadcast {
+                            event: EV_PATCH.to_string(),
+                            payload: wire.payload.clone().unwrap_or(Value::Null),
+                        });
+                    }
+                    PatchOutcome::SnapshotSender => {
+                        if let Some(snap) = self.build_snapshot(&m.file) {
+                            let w = Wire::evt(EV_SNAPSHOT, snap);
+                            self.send_to_peer(peer, &w);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         self.track(event, &payload);
         let wire = Wire::evt(event, payload);
         // forward to other remote peers and to the local host editor
         self.broadcast(&wire, Some(peer));
-        let _ = self
-            .ev_tx
-            .send(Ev::Broadcast { event: event.to_string(), payload: wire.payload.clone().unwrap_or(Value::Null) });
+        let _ = self.ev_tx.send(Ev::Broadcast {
+            event: event.to_string(),
+            payload: wire.payload.clone().unwrap_or(Value::Null),
+        });
         // authoritative answer so joiners always get content even if no peer responds
         if event == EV_SNAP_REQ {
             if let Ok(req) = serde_json::from_value::<SnapReqMsg>(wire.payload.clone().unwrap_or_default()) {
                 if let Some(snap) = self.build_snapshot(&req.file) {
                     let w = Wire::evt(EV_SNAPSHOT, snap);
-                    self.broadcast(&w, Some(peer));
+                    self.send_to_peer(peer, &w);
                 }
             }
+        }
+    }
+
+    // ── patch ingest: the serialization point for concurrent edits ──
+
+    /// Apply a patch to the authoritative store. Returns what to broadcast.
+    ///
+    /// * `base_rev == store.rev`  → clean in-order apply; broadcast as-is.
+    /// * `base_rev <  store.rev`  → stale/concurrent: rebase onto current content
+    ///   (non-overlapping edits merge; the transformed patch is broadcast).
+    /// * block not found (or sender ahead) → LWW: drop it, resync the sender via
+    ///   a snapshot so nobody diverges.
+    fn apply_patch_message(&mut self, m: &PatchMsg) -> PatchOutcome {
+        let state = self
+            .store
+            .entry(m.file.clone())
+            .or_insert_with(|| FileState {
+                lang: m.lang.clone(),
+                lines: Vec::new(),
+                rev: 0,
+            });
+        state.lang = m.lang.clone();
+        let pre_rev = state.rev;
+        let base = state.lines.clone();
+        if m.base_rev == pre_rev {
+            apply_blocks(&mut state.lines, &m.patches);
+            state.rev = pre_rev + 1;
+            self.dirty = true;
+            PatchOutcome::Applied {
+                payload: json!(m),
+                echo_sender: true,
+            }
+        } else if m.base_rev < pre_rev {
+            match rebase_blocks(&base, &m.patches) {
+                Some(trans) => {
+                    apply_blocks(&mut state.lines, &trans);
+                    state.rev = pre_rev + 1;
+                    self.dirty = true;
+                    let rebased = PatchMsg {
+                        id: m.id.clone(),
+                        file: m.file.clone(),
+                        lang: m.lang.clone(),
+                        base_rev: pre_rev,
+                        patches: trans,
+                    };
+                    PatchOutcome::Applied {
+                        payload: json!(rebased),
+                        echo_sender: false,
+                    }
+                }
+                None => PatchOutcome::SnapshotSender,
+            }
+        } else {
+            PatchOutcome::SnapshotSender
         }
     }
 
@@ -216,22 +336,6 @@ impl Hub {
 
     fn track(&mut self, event: &str, payload: &Value) {
         match event {
-            EV_PATCH => {
-                if let Ok(m) = serde_json::from_value::<PatchMsg>(payload.clone()) {
-                    let state = self
-                        .store
-                        .entry(m.file)
-                        .or_insert_with(|| FileState {
-                            lang: m.lang.clone(),
-                            lines: Vec::new(),
-                            rev: 0,
-                        });
-                    state.lang = m.lang;
-                    apply_patches(&mut state.lines, &m.patches);
-                    state.rev = state.rev.saturating_add(1);
-                    self.dirty = true;
-                }
-            }
             EV_SNAPSHOT => {
                 if let Ok(m) = serde_json::from_value::<SnapshotMsg>(payload.clone()) {
                     let state = self
@@ -242,12 +346,13 @@ impl Hub {
                             lines: Vec::new(),
                             rev: 0,
                         });
-                    state.lang = m.lang;
-                    state.lines = m.lines;
-                    if m.rev > state.rev {
+                    // Ignore stale snapshots so an old peer can never regress the store.
+                    if m.rev >= state.rev {
+                        state.lang = m.lang;
+                        state.lines = m.lines;
                         state.rev = m.rev;
+                        self.dirty = true;
                     }
-                    self.dirty = true;
                 }
             }
             EV_PRESENCE => {
@@ -307,7 +412,7 @@ impl Hub {
                     rev: 0,
                 };
                 self.store.insert(name.clone(), state);
-                files.push(StoredFile { name, lang, code });
+                files.push(StoredFile { name, lang, code, rev: 0 });
             }
         }
         files
@@ -323,6 +428,7 @@ impl Hub {
                 name: name.clone(),
                 lang: st.lang.clone(),
                 code: st.lines.join("\n"),
+                rev: st.rev,
             })
             .collect();
         let members: Vec<Presence> = self.members.values().cloned().collect();
@@ -430,18 +536,6 @@ async fn handle_conn(
 
     let _ = inc_tx.send(Incoming::Closed { peer });
     Ok(())
-}
-
-fn apply_patches(lines: &mut Vec<String>, patches: &[LinePatch]) {
-    for p in patches {
-        let start = p.start.min(lines.len());
-        let end = (start + p.remove).min(lines.len());
-        let mut new_lines = Vec::with_capacity(lines.len() - (end - start) + p.lines.len());
-        new_lines.extend_from_slice(&lines[..start]);
-        new_lines.extend_from_slice(&p.lines);
-        new_lines.extend_from_slice(&lines[end..]);
-        *lines = new_lines;
-    }
 }
 
 fn safe_name(name: &str) -> Option<String> {

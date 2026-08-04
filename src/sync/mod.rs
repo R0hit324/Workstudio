@@ -10,6 +10,7 @@ pub struct StoredFile {
     pub name: String,
     pub lang: String,
     pub code: String,
+    pub rev: u64,
 }
 
 #[allow(dead_code)]

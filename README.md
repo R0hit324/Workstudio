@@ -31,6 +31,15 @@ Other devices: nexus --connect 192.168.1.10:8245
   indicator appears in the status bar, and `Ctrl+J` opens the commit log.
 - **Joining late:** a new device receives a full snapshot (all files + current
   members) the moment it connects, then stays in sync via patches.
+- **Conflict resolution (rebase + last-writer-wins):** the host serializes all
+  patches. A patch that applies cleanly to the current revision is applied and
+  echoed to the room. A patch whose base is behind gets **rebased** onto the
+  current content when its removed lines are still present, and the transformed
+  patch is relayed; otherwise (or if the sender is ahead) the patch is dropped
+  and that peer is re-synced with a snapshot — so a simultaneous same-line edit
+  keeps exactly one winner everywhere. Distinct-region edits from different
+  users merge cleanly; overlapping edits converge to the last writer, and every
+  screen plus the on-disk file stay identical.
 
 ## Getting started
 

@@ -3,6 +3,7 @@ mod config;
 mod editor;
 mod git;
 mod languages;
+mod patch;
 mod runner;
 mod sync;
 mod theme;

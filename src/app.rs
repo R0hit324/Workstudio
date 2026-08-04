@@ -10,6 +10,7 @@ use tui_textarea::{CursorMove, TextArea};
 use crate::config::Config;
 use crate::editor::{completions, highlight::Highlighter};
 use crate::languages::{self, Language};
+use crate::patch::{apply_blocks, compute_line_patches, rebase_onto};
 use crate::runner::{self, OutputKind, RunnerEvent};
 use crate::sync::protocol::*;
 use crate::sync::{Ev, SyncClient};
@@ -75,10 +76,17 @@ pub enum Modal {
 pub struct EditorFile {
     pub lang: &'static Language,
     pub ta: TextArea<'static>,
+    /// Canonical revision: the number of host-serialized patches applied.
     pub rev: u64,
-    pub base_rev: u64,
-    pub dirty: bool,
-    pub prev_lines: Vec<String>,
+    /// Last host-confirmed content. `base_rev` of outgoing patches is `rev`;
+    /// incoming patches are applied against this.
+    pub canonical: Vec<String>,
+    /// The buffer state the last transmitted patch was diffed against, so
+    /// consecutive keystrokes produce incremental diffs that the host can
+    /// rebase (compose) even when several are in flight.
+    pub last_sent: Vec<String>,
+    /// True while the live buffer differs from `canonical` (unconfirmed edits).
+    pub pending: bool,
     pub cursors: BTreeMap<String, (usize, usize)>,
 }
 
@@ -243,25 +251,26 @@ impl App {
             .or_else(|| Some(languages::guess_lang(name)))
             .unwrap_or_else(languages::default_lang);
         let lines: Vec<String> = code.split('\n').map(|s| s.to_string()).collect();
-        let mut ta = TextArea::from(lines);
+        let mut ta = TextArea::from(lines.clone());
         ta.set_tab_length(2);
         ta.set_max_histories(100);
-        let prev_lines = ta.lines().to_vec();
         self.files.insert(
             name.to_string(),
             EditorFile {
                 lang,
                 ta,
                 rev: 0,
-                base_rev: 0,
-                dirty: !silent,
-                prev_lines,
+                canonical: lines.clone(),
+                last_sent: lines,
+                pending: false,
                 cursors: BTreeMap::new(),
             },
         );
         self.set_active(name);
         self.send_file_msg(name, true);
         if !silent {
+            // Seed the host store + peers with the new file's content immediately.
+            self.send_snapshot(name);
             self.toast = Some((format!("📄 Created {name}"), Instant::now()));
         }
     }
@@ -293,7 +302,6 @@ impl App {
         if let Some(f) = self.files.get_mut(name) {
             if let Some(l) = languages::by_id(lang_id) {
                 f.lang = l;
-                f.dirty = true;
             }
         }
     }
@@ -316,6 +324,7 @@ impl App {
                         name: name.clone(),
                         lang: f.lang.id.to_string(),
                         code: f.ta.lines().join("\n"),
+                        rev: f.rev,
                     })
                     .collect();
                 s.save_all(files);
@@ -409,25 +418,32 @@ impl App {
             Some(n) => n,
             None => return,
         };
-        let f = self.files.get_mut(&name).unwrap();
-        f.rev += 1;
-        f.base_rev = f.rev;
-        f.dirty = true;
-        let old = f.prev_lines.clone();
+        self.broadcast_edit_for(&name);
+    }
+
+    /// Diff the live buffer against the *last transmitted* state (so rapid
+    /// keystrokes produce small, incremental, rebasable patches), mark the file
+    /// pending, and send at the current canonical revision. The revision is NOT
+    /// advanced here — it only counts canonical patches, which is what makes
+    /// concurrent edits composable.
+    pub fn broadcast_edit_for(&mut self, name: &str) {
+        let f = self.files.get_mut(name).unwrap();
+        f.pending = true;
+        let last_sent = f.last_sent.clone();
         let new = f.ta.lines().to_vec();
-        let patches = compute_line_patches(&old, &new);
+        let patches = compute_line_patches(&last_sent, &new);
         if patches.is_empty() {
             return;
         }
         let msg = PatchMsg {
             id: self.self_id.clone(),
-            file: name.clone(),
+            file: name.to_string(),
             lang: f.lang.id.to_string(),
             base_rev: f.rev,
             patches,
         };
         if let Some(s) = &self.sync {
-            s.broadcast(EV_PATCH, json!(msg));
+            s.broadcast(EV_PATCH, json!(&msg));
             if self.cfg.webcompat {
                 s.broadcast(
                     EV_WEB_CODE,
@@ -439,7 +455,7 @@ impl App {
                 );
             }
         }
-        f.prev_lines = new;
+        f.last_sent = new;
     }
 
     pub fn send_snapshot(&mut self, name: &str) {
@@ -450,7 +466,7 @@ impl App {
                     file: name.to_string(),
                     lang: f.lang.id.to_string(),
                     rev: f.rev,
-                    lines: f.ta.lines().to_vec(),
+                    lines: f.canonical.clone(),
                 };
                 s.broadcast(EV_SNAPSHOT, json!(msg));
             }
@@ -954,10 +970,7 @@ impl App {
             f.ta = TextArea::from(lines.clone());
             f.ta.set_tab_length(2);
             f.ta.set_max_histories(100);
-            f.prev_lines = lines.clone();
-            f.rev += 1;
-            f.base_rev = f.rev;
-            f.dirty = true;
+            f.pending = true;
             // restore cursor
             f.ta.move_cursor(CursorMove::Head);
             for _ in 0..row {
@@ -968,7 +981,7 @@ impl App {
                 f.ta.move_cursor(CursorMove::Forward);
             }
         }
-        self.broadcast_edit();
+        self.broadcast_edit_for(name);
     }
 
     // ── SYNC EVENT HANDLING ──
@@ -996,22 +1009,24 @@ impl App {
                 let count = files.len();
                 for sf in &files {
                     let should_load = match self.files.get(&sf.name) {
-                        Some(f) => !(f.dirty && !f.prev_lines.is_empty()),
+                        Some(f) => !f.pending,
                         None => true,
                     };
                     if !should_load {
                         continue;
                     }
-                    if self.files.contains_key(&sf.name) {
-                        self.set_text(&sf.name, &sf.code);
-                        if let Some(f) = self.files.get_mut(&sf.name) {
-                            f.dirty = false;
-                        }
-                    } else {
+                    let lines: Vec<String> = sf.code.split('\n').map(|s| s.to_string()).collect();
+                    if !self.files.contains_key(&sf.name) {
                         self.create_file_internal(&sf.name, &sf.lang, &sf.code, true);
-                        if let Some(f) = self.files.get_mut(&sf.name) {
-                            f.dirty = false;
-                        }
+                    }
+                    if let Some(f) = self.files.get_mut(&sf.name) {
+                        f.canonical = lines.clone();
+                        f.last_sent = lines.clone();
+                        f.rev = sf.rev;
+                        f.ta = TextArea::from(lines);
+                        f.ta.set_tab_length(2);
+                        f.ta.set_max_histories(100);
+                        f.pending = false;
                     }
                 }
                 self.last_saved = format!("Loaded {count} saved file(s)");
@@ -1023,9 +1038,6 @@ impl App {
             Ev::SaveDone { count } => {
                 self.last_saved = format!("Saved {} files · {}", count, time_now());
                 self.toast = Some(("💾 Workspace saved".into(), Instant::now()));
-                for f in self.files.values_mut() {
-                    f.dirty = false;
-                }
                 self.refresh_git();
             }
             Ev::SaveErr(e) => {
@@ -1093,13 +1105,7 @@ impl App {
             }
             EV_PATCH => {
                 if let Ok(m) = serde_json::from_value::<PatchMsg>(payload) {
-                    if m.id == self.self_id {
-                        return;
-                    }
-                    if !self.files.contains_key(&m.file) {
-                        self.create_file_internal(&m.file, &m.lang, "", true);
-                    }
-                    self.apply_patches(&m.file, &m.patches);
+                    self.on_patch(m);
                 }
             }
             EV_SNAPSHOT => {
@@ -1107,18 +1113,7 @@ impl App {
                     if m.id == self.self_id {
                         return;
                     }
-                    let apply = match self.files.get(&m.file) {
-                        None => true,
-                        Some(f) => f.rev <= m.rev && !f.dirty,
-                    };
-                    if apply {
-                        self.set_text(&m.file, &m.lines.join("\n"));
-                        if let Some(f) = self.files.get_mut(&m.file) {
-                            f.rev = m.rev;
-                            f.base_rev = m.rev;
-                            f.dirty = false;
-                        }
-                    }
+                    self.on_snapshot(m);
                 }
             }
             EV_SNAP_REQ => {
@@ -1161,46 +1156,139 @@ impl App {
         }
     }
 
-    fn apply_patches(&mut self, file: &str, patches: &[LinePatch]) {
-        let name = file.to_string();
-        let was_active = self.active_file.as_deref() == Some(file);
-        let (cursor_row, cursor_col) = if was_active {
-            self.files[&name].ta.cursor()
-        } else {
-            (0, 0)
+    /// Apply a canonical patch. The sender's own echo only advances `canonical`
+    /// (its live buffer already contains the edit); foreign patches are folded
+    /// into the live buffer by rebasing any pending local edits on top, so an
+    /// in-progress edit is never clobbered or corrupted by a concurrent one.
+    fn on_patch(&mut self, m: PatchMsg) {
+        let file = m.file.clone();
+        if !self.files.contains_key(&file) {
+            self.create_file_internal(&file, &m.lang, "", true);
+            self.request_snapshot(&file);
+            return;
+        }
+        let current_rev = self.files[&file].rev;
+        if m.base_rev > current_rev {
+            // We missed patches between our base and this one — resync.
+            self.request_snapshot(&file);
+            return;
+        }
+        if m.base_rev < current_rev {
+            return; // stale duplicate
+        }
+        let is_self = m.id == self.self_id;
+        let (was_active, cursor_row, cursor_col, canonical, editing, pending) = {
+            let f = self.files.get(&file).unwrap();
+            let was_active = self.active_file.as_deref() == Some(file.as_str());
+            let (cr, cc) = if was_active { f.ta.cursor() } else { (0, 0) };
+            (was_active, cr, cc, f.canonical.clone(), f.ta.lines().to_vec(), f.pending)
         };
-
-        // Build new lines by applying patches
-        let mut lines: Vec<String> = self.files[&name].ta.lines().to_vec();
-        for p in patches {
-            let start = p.start.min(lines.len());
-            let end = (start + p.remove).min(lines.len());
-            let mut new_lines = Vec::new();
-            new_lines.extend_from_slice(&lines[..start]);
-            new_lines.extend_from_slice(&p.lines);
-            new_lines.extend_from_slice(&lines[end..]);
-            lines = new_lines;
-        }
-
-        let ta = &mut self.files.get_mut(&name).unwrap().ta;
-        *ta = TextArea::from(lines.clone());
-        ta.set_tab_length(2);
-        ta.set_max_histories(100);
-        if was_active {
-            ta.move_cursor(CursorMove::Head);
-            for _ in 0..cursor_row {
-                ta.move_cursor(CursorMove::Down);
+        let mut new_canonical = canonical.clone();
+        apply_blocks(&mut new_canonical, &m.patches);
+        let new_editing = if is_self {
+            editing
+        } else if !pending {
+            new_canonical.clone()
+        } else {
+            let pend = compute_line_patches(&canonical, &editing);
+            if pend.is_empty() {
+                new_canonical.clone()
+            } else {
+                rebase_onto(&new_canonical, &pend).unwrap_or(editing)
             }
-            let max = ta.lines().get(cursor_row).map(|l| l.chars().count()).unwrap_or(0);
-            for _ in 0..cursor_col.min(max) {
-                ta.move_cursor(CursorMove::Forward);
-            }
-        }
-        let f = self.files.get_mut(&name).unwrap();
-        f.prev_lines = lines;
+        };
+        let f = self.files.get_mut(&file).unwrap();
+        f.canonical = new_canonical;
         f.rev += 1;
-        f.base_rev = f.rev;
-        f.dirty = true;
+        if is_self {
+            f.pending = f.ta.lines().to_vec() != f.canonical;
+            return;
+        }
+        f.ta = TextArea::from(new_editing.clone());
+        f.ta.set_tab_length(2);
+        f.ta.set_max_histories(100);
+        if was_active {
+            f.ta.move_cursor(CursorMove::Head);
+            for _ in 0..cursor_row {
+                f.ta.move_cursor(CursorMove::Down);
+            }
+            let max = f.ta.lines().get(cursor_row).map(|l| l.chars().count()).unwrap_or(0);
+            for _ in 0..cursor_col.min(max) {
+                f.ta.move_cursor(CursorMove::Forward);
+            }
+        }
+        f.last_sent = new_editing;
+        f.pending = f.ta.lines().to_vec() != f.canonical;
+    }
+
+    /// Adopt an authoritative snapshot. Applies when it is at least as new as
+    /// our canonical revision (snapshots are the merge result, so accepting one
+    /// never loses the user's already-merged edits). A snapshot can arrive
+    /// while the user is mid-keystroke (the host rebases or drops our in-flight
+    /// patch and resyncs us): in that case the live buffer is AHEAD of the
+    /// snapshot, so we keep it and re-send whatever the host is missing.
+    fn on_snapshot(&mut self, m: SnapshotMsg) {
+        let file = m.file.clone();
+        let current_rev = self.files.get(&file).map(|f| f.rev).unwrap_or(0);
+        if m.rev < current_rev {
+            return;
+        }
+        let (was_active, cursor_row, cursor_col, editing, pending) = {
+            let was_active = self.active_file.as_deref() == Some(file.as_str());
+            let (cr, cc) = if was_active {
+                let f = self.files.get(&file).unwrap();
+                f.ta.cursor()
+            } else {
+                (0, 0)
+            };
+            let editing = self
+                .files
+                .get(&file)
+                .map(|f| f.ta.lines().to_vec())
+                .unwrap_or_default();
+            let pending = self.files.get(&file).map(|f| f.pending).unwrap_or(false);
+            (was_active, cr, cc, editing, pending)
+        };
+        if !self.files.contains_key(&file) {
+            self.create_file_internal(&file, &m.lang, "", true);
+        }
+        // The user's live buffer has edits the host hasn't confirmed yet.
+        let preserve = pending && !editing.is_empty() && editing != m.lines;
+        if preserve {
+            if let Some(s) = &self.sync {
+                let pend = compute_line_patches(&m.lines, &editing);
+                if !pend.is_empty() {
+                    let msg = PatchMsg {
+                        id: self.self_id.clone(),
+                        file: file.clone(),
+                        lang: m.lang.clone(),
+                        base_rev: m.rev,
+                        patches: pend,
+                    };
+                    s.broadcast(EV_PATCH, json!(&msg));
+                }
+            }
+        }
+        let f = self.files.get_mut(&file).unwrap();
+        f.canonical = m.lines.clone();
+        f.last_sent = if preserve { editing.clone() } else { m.lines.clone() };
+        f.rev = m.rev;
+        if !preserve {
+            f.ta = TextArea::from(m.lines);
+            f.ta.set_tab_length(2);
+            f.ta.set_max_histories(100);
+            if was_active {
+                f.ta.move_cursor(CursorMove::Head);
+                for _ in 0..cursor_row {
+                    f.ta.move_cursor(CursorMove::Down);
+                }
+                let max = f.ta.lines().get(cursor_row).map(|l| l.chars().count()).unwrap_or(0);
+                for _ in 0..cursor_col.min(max) {
+                    f.ta.move_cursor(CursorMove::Forward);
+                }
+            }
+        }
+        f.pending = f.ta.lines().to_vec() != f.canonical;
     }
 
     // ── TICK ──
@@ -1252,27 +1340,6 @@ impl App {
     pub fn lang_of(&self, name: &str) -> &'static Language {
         self.files.get(name).map(|f| f.lang).unwrap_or_else(languages::default_lang)
     }
-}
-
-pub fn compute_line_patches(old: &[String], new: &[String]) -> Vec<LinePatch> {
-    let mut start = 0;
-    while start < old.len() && start < new.len() && old[start] == new[start] {
-        start += 1;
-    }
-    let mut old_end = old.len();
-    let mut new_end = new.len();
-    while old_end > start && new_end > start && old[old_end - 1] == new[new_end - 1] {
-        old_end -= 1;
-        new_end -= 1;
-    }
-    if old_end == start && new_end == start {
-        return vec![];
-    }
-    vec![LinePatch {
-        start,
-        remove: old_end - start,
-        lines: new[start..new_end].to_vec(),
-    }]
 }
 
 pub fn member_color(name: &str) -> Color {

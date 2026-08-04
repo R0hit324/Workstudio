@@ -52,6 +52,8 @@ pub struct WelcomeFile {
     pub name: String,
     pub lang: String,
     pub code: String,
+    #[serde(default)]
+    pub rev: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -73,10 +75,22 @@ pub struct CursorMsg {
 }
 
 /// A replacement of `remove` lines starting at `start` with `lines`.
+///
+/// `old` holds the removed block's content. For patches applied to the state
+/// they were computed against (`base_rev` matches), `old` is redundant; it is
+/// required to *rebase* the patch onto newer content when concurrent edits
+/// land out of order. `prev`/`next` anchor the insertion point for pure
+/// insertions (`old` empty) so a stale insert can be re-located.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LinePatch {
     pub start: usize,
     pub remove: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub old: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
     pub lines: Vec<String>,
 }
 
