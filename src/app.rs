@@ -1160,16 +1160,27 @@ impl App {
                     if m.author == self.cfg.name {
                         return;
                     }
-                    let is_active = self.active_file.as_deref() == Some(m.file.as_str());
-                    if let Some(f) = self.files.get_mut(&m.file) {
-                        if f.ta.lines().join("\n") == m.code {
-                            return;
-                        }
-                    } else {
+                    let (existing, pending) = match self.files.get(&m.file) {
+                        Some(f) => (f.ta.lines().join("\n"), f.pending),
+                        None => (String::new(), false),
+                    };
+                    if !self.files.contains_key(&m.file) {
                         self.create_file_internal(&m.file, "python", "", true);
                     }
-                    let _ = is_active;
-                    self.set_text(&m.file, &m.code);
+                    // Never clobber the user's in-flight edit (last-writer-wins):
+                    // the web client will re-send, and the host LWWs the next patch.
+                    if pending && existing != m.code {
+                        return;
+                    }
+                    let lines: Vec<String> = m.code.split('\n').map(|s| s.to_string()).collect();
+                    let f = self.files.get_mut(&m.file).unwrap();
+                    f.canonical = lines.clone();
+                    f.last_sent = lines.clone();
+                    f.rev = f.rev.saturating_add(1);
+                    f.pending = false;
+                    f.ta = TextArea::from(lines);
+                    f.ta.set_tab_length(2);
+                    f.ta.set_max_histories(100);
                 }
             }
             _ => {}

@@ -25,6 +25,13 @@ Other devices: nexus --connect 192.168.1.10:8245
 - **Join mode:** `nexus --connect <host-ip>:<port>` connects to a host over
   WebSocket. Every edit is sent as a line-diff patch; the host relays patches,
   cursors, and presence to all other connected devices.
+- **Web browser:** any device can open `http://<host-ip>:<port>/` in a browser
+  to get a live, collaborative editor served by the host on the same port. The
+  browser joins the same WebSocket session: it shows the workspace files and
+  who's online in real time, and its edits are folded into the shared store —
+  so a web edit shows up in the TUI, gets persisted, and lands in the git
+  commit just like any other user's. TUI edits are pushed to every open browser
+  as whole-file updates automatically.
 - **Git:** if the host's directory is a git repository, pressing `Ctrl+S` stages
   and commits the workspace as the **person who saved** (`git log` attribution via
   `--author`) — the session owner when the host saves, or the joiner's display
@@ -70,7 +77,7 @@ panel with the exact join command to share with your team.
 | `--dir <PATH>`      | Host workspace directory (host mode); git repo → commits on save   |
 | `--port <PORT>`     | Host port (default `8245`); host binds `0.0.0.0` so all subnets work |
 | `--connect <HOST:PORT>` | Join an existing host instead of hosting                       |
-| `--webcompat`       | Emit whole-file `code`/`presence` events (web-app compatibility)   |
+| `--webcompat`       | Legacy whole-file `code`/`presence` broadcasts (browsers now work automatically via the host's translation) |
 
 ## Keybindings
 
@@ -106,4 +113,4 @@ panel with the exact join command to share with your team.
 - [x] Git: host commits workspace dir as session owner; status bar + git log modal
 - [x] Multiple cursors UX polish for multiple users
 - [x] Git support for all users (joiners, not just the host)
-- [ ] Web-app interop via the same LAN WebSocket
+- [x] Web-app interop via the same LAN WebSocket

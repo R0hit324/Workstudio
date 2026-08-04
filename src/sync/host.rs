@@ -2,18 +2,18 @@ use crate::config::Config;
 use crate::languages;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
 
 use super::protocol::{
-    PatchMsg, Presence, SaveReqMsg, SnapshotMsg, SnapReqMsg, WelcomeFile, Wire, EV_LOAD_REQ,
-    EV_PATCH, EV_PRESENCE, EV_SAVE_REQ, EV_SNAPSHOT, EV_SNAP_REQ,
+    PatchMsg, Presence, SaveReqMsg, SnapshotMsg, SnapReqMsg, WebCodeMsg, WelcomeFile, Wire,
+    EV_LOAD_REQ, EV_PATCH, EV_PRESENCE, EV_SAVE_REQ, EV_SNAPSHOT, EV_SNAP_REQ, EV_WEB_CODE,
+    EV_WEB_PRESENCE,
 };
 use super::{Cmd, Ev, StoredFile};
 use crate::patch::{apply_blocks, rebase_blocks};
@@ -32,6 +32,7 @@ enum Incoming {
     Registered {
         peer: u64,
         out: mpsc::UnboundedSender<String>,
+        web: bool,
     },
     Msg {
         peer: u64,
@@ -68,6 +69,10 @@ struct Hub {
     store: BTreeMap<String, FileState>,
     members: BTreeMap<String, Presence>,
     peers: BTreeMap<u64, mpsc::UnboundedSender<String>>,
+    /// Connection ids that speak the simple whole-file `code`/`presence` dialect
+    /// (browsers). The hub pushes a `code` event to them after every applied
+    /// patch so web viewers always see the authoritative content.
+    web_peers: HashSet<u64>,
     dirty: bool,
     last_save: Instant,
 }
@@ -82,6 +87,7 @@ impl Hub {
             store: BTreeMap::new(),
             members: BTreeMap::new(),
             peers: BTreeMap::new(),
+            web_peers: HashSet::new(),
             dirty: false,
             last_save: Instant::now(),
         }
@@ -113,10 +119,13 @@ impl Hub {
                 }
                 maybe = inc_rx.recv() => {
                     match maybe {
-                        Some(Incoming::Registered { peer, out }) => self.register(peer, out),
+                        Some(Incoming::Registered { peer, out, web }) => {
+                            self.register(peer, out, web)
+                        }
                         Some(Incoming::Msg { peer, event, payload }) => self.handle_peer(peer, &event, payload),
                         Some(Incoming::Closed { peer }) => {
                             self.peers.remove(&peer);
+                            self.web_peers.remove(&peer);
                         }
                         None => break,
                     }
@@ -143,6 +152,7 @@ impl Hub {
                             PatchOutcome::Applied { payload, .. } => {
                                 let wire = Wire::evt(EV_PATCH, payload);
                                 self.broadcast(&wire, None);
+                                self.push_web_code(&m.file);
                                 let _ = self.ev_tx.send(Ev::Broadcast {
                                     event: EV_PATCH.to_string(),
                                     payload: wire.payload.clone().unwrap_or(Value::Null),
@@ -241,6 +251,7 @@ impl Hub {
                                 self.send_to_peer(peer, &w);
                             }
                         }
+                        self.push_web_code(&m.file);
                         let _ = self.ev_tx.send(Ev::Broadcast {
                             event: EV_PATCH.to_string(),
                             payload: wire.payload.clone().unwrap_or(Value::Null),
@@ -329,8 +340,11 @@ impl Hub {
         }
     }
 
-    fn register(&mut self, peer: u64, out: mpsc::UnboundedSender<String>) {
+    fn register(&mut self, peer: u64, out: mpsc::UnboundedSender<String>, web: bool) {
         self.peers.insert(peer, out);
+        if web {
+            self.web_peers.insert(peer);
+        }
         let wire = self.welcome();
         self.send_to_peer(peer, &wire);
     }
@@ -361,6 +375,28 @@ impl Hub {
             EV_PRESENCE => {
                 if let Ok(p) = serde_json::from_value::<Presence>(payload.clone()) {
                     self.members.insert(p.id.clone(), p);
+                }
+            }
+            EV_WEB_PRESENCE => {
+                if let Ok(p) = serde_json::from_value::<Presence>(payload.clone()) {
+                    self.members.insert(p.id.clone(), p);
+                }
+            }
+            EV_WEB_CODE => {
+                // A browser sent a whole-file replacement. Adopt it as the new
+                // canonical content so web edits persist and git-commit.
+                if let Ok(m) = serde_json::from_value::<WebCodeMsg>(payload.clone()) {
+                    let state = self
+                        .store
+                        .entry(m.file.clone())
+                        .or_insert_with(|| FileState {
+                            lang: "python".into(),
+                            lines: Vec::new(),
+                            rev: 0,
+                        });
+                    state.lines = m.code.split('\n').map(|s| s.to_string()).collect();
+                    state.rev = state.rev.saturating_add(1);
+                    self.dirty = true;
                 }
             }
             _ => {}
@@ -476,6 +512,27 @@ impl Hub {
         }
     }
 
+    /// Push the authoritative content of `file` to every connected browser as a
+    /// whole-file `code` event (the simple web dialect), so web viewers always
+    /// converge even when the editing TUI peer doesn't run `--webcompat`.
+    fn push_web_code(&self, file: &str) {
+        if self.web_peers.is_empty() {
+            return;
+        }
+        let Some(st) = self.store.get(file) else {
+            return;
+        };
+        let msg = WebCodeMsg {
+            author: self.cfg.name.clone(),
+            file: file.to_string(),
+            code: st.lines.join("\n"),
+        };
+        let wire = Wire::evt(EV_WEB_CODE, json!(msg));
+        for &p in &self.web_peers {
+            self.send_to_peer(p, &wire);
+        }
+    }
+
     fn broadcast(&self, wire: &Wire, except: Option<u64>) {
         let payload = match serde_json::to_string(wire) {
             Ok(p) => p,
@@ -502,7 +559,11 @@ async fn handle_conn(
     stream: TcpStream,
     inc_tx: mpsc::UnboundedSender<Incoming>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws: WebSocketStream<TcpStream> = tokio_tungstenite::accept_async(stream).await?;
+    let Some((ws, is_web)) = crate::web::accept(stream).await? else {
+        // Browser navigation — the web editor page was served and the socket
+        // closed; nothing else to do for this connection.
+        return Ok(());
+    };
     let (mut w, mut r) = ws.split();
 
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
@@ -510,6 +571,7 @@ async fn handle_conn(
     let _ = inc_tx.send(Incoming::Registered {
         peer,
         out: out_tx.clone(),
+        web: is_web,
     });
 
     loop {

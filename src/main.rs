@@ -7,6 +7,7 @@ mod patch;
 mod runner;
 mod sync;
 mod theme;
+mod web;
 mod ui;
 mod util;
 

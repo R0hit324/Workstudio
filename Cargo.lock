@@ -1138,17 +1138,20 @@ dependencies = [
 name = "nexus"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "clap",
  "crossterm",
  "dirs",
  "futures-util",
+ "httparse",
  "local-ip-address",
  "rand 0.9.5",
  "ratatui",
  "reqwest",
  "serde",
  "serde_json",
+ "sha1",
  "syntect",
  "tokio",
  "tokio-tungstenite",

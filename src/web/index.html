@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexus · Live Editor</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #12141a; color: #e8eaf0;
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 14px;
+    background: #1b1e26; border-bottom: 1px solid #2a2e3a; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header input { background: #22262f; border: 1px solid #333947; color: #e8eaf0;
+    padding: 5px 9px; border-radius: 6px; font-size: 13px; outline: none; }
+  header input:focus { border-color: #3d7eff; }
+  #status { font-size: 12px; color: #8b93a7; margin-left: auto; white-space: nowrap; }
+  #status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 6px; background: #f59f00; }
+  #status.ok .dot { background: #2ecc71; }
+  #status.bad .dot { background: #e74c3c; }
+  main { flex: 1; display: flex; min-height: 0; }
+  aside { width: 240px; border-right: 1px solid #2a2e3a; background: #171a21;
+    overflow-y: auto; display: flex; flex-direction: column; }
+  aside section { padding: 10px 12px; }
+  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: #6b7280; margin: 0 0 8px; }
+  .file { display: flex; align-items: center; gap: 8px; padding: 5px 8px; margin: 2px 0;
+    border-radius: 6px; cursor: pointer; color: #cdd3e0; }
+  .file:hover { background: #20242e; }
+  .file.active { background: #2a3a5e; color: #fff; }
+  .file .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .mem { display: flex; align-items: center; gap: 8px; padding: 4px 8px; color: #cdd3e0; }
+  .mem .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .mem.you { opacity: .95; }
+  #empty { color: #6b7280; padding: 14px; font-size: 13px; }
+  #editorWrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #editor { flex: 1; width: 100%; border: 0; resize: none; outline: none;
+    background: #12141a; color: #e8eaf0; font: 14px/1.55 "JetBrains Mono", "Fira Code",
+    Consolas, "Menlo", monospace; padding: 14px 18px; tab-size: 2; }
+  footer { display: flex; gap: 16px; padding: 6px 14px; font-size: 12px; color: #8b93a7;
+    background: #171a21; border-top: 1px solid #2a2e3a; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: #1f2937; border: 1px solid #374151; color: #e8eaf0; padding: 9px 16px;
+    border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Nexus · Live Editor</h1>
+    <input id="name" placeholder="Your display name" maxlength="24">
+    <span id="status"><span class="dot"></span>connecting…</span>
+  </header>
+  <main>
+    <aside>
+      <section><h2>Files</h2><div id="files"></div></section>
+      <section><h2>Team</h2><div id="team"></div></section>
+    </aside>
+    <div id="editorWrap">
+      <textarea id="editor" spellcheck="false" autocomplete="off"
+        autocorrect="off" autocapitalize="off" placeholder="No file open"></textarea>
+    </div>
+  </main>
+  <footer>
+    <span id="lines">0 lines</span>
+    <span id="fname"></span>
+  </footer>
+</div>
+<div id="toast"></div>
+<script>
+"use strict";
+const PALETTE = ["#3d7eff","#2ecc71","#e74c3c","#f39c12","#9b59b6","#1abc9c","#e67e22","#e91e63"];
+const wsEvt = (event, payload) => JSON.stringify({ty:"evt", event, payload});
+const $ = id => document.getElementById(id);
+
+let st = {
+  ws: null, files: {}, members: {}, active: null, myId: "", myName: "",
+  lastSent: {}, heartbeat: null, sendTimer: null, sentAnything: false,
+};
+
+function colorOf(name) {
+  let s = 0;
+  for (const ch of String(name || "")) s = (s + ch.charCodeAt(0)) % PALETTE.length;
+  return PALETTE[s];
+}
+
+function setStatus(cls, text) {
+  const el = $("status");
+  el.className = cls;
+  el.innerHTML = `<span class="dot"></span>${text}`;
+}
+function toast(msg) {
+  const el = $("toast");
+  el.textContent = msg; el.classList.add("show");
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+function connect() {
+  if (st.ws && st.ws.readyState <= 1) return;
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}`);
+  st.ws = ws;
+  ws.onopen = () => {
+    setStatus("ok", "connected");
+    ws.send(wsEvt("nx:load_req", null));
+    sendPresence();
+    clearInterval(st.heartbeat);
+    st.heartbeat = setInterval(sendPresence, 10000);
+  };
+  ws.onclose = () => {
+    setStatus("bad", "offline — reconnecting…");
+    clearInterval(st.heartbeat);
+    setTimeout(connect, 2500);
+  };
+  ws.onerror = () => {};
+  ws.onmessage = e => {
+    let wire;
+    try { wire = JSON.parse(e.data); } catch { return; }
+    if (wire.ty === "welcome") {
+      (wire.files || []).forEach(f => st.files[f.name] = f.code);
+      (wire.members || []).forEach(m => st.members[m.id] = m);
+      const names = Object.keys(st.files);
+      if (!st.active && names.length) selectFile(names[0]);
+      render();
+    } else if (wire.ty === "evt") {
+      const ev = wire.event, p = wire.payload || {};
+      if (ev === "code") handleCode(p);
+      else if (ev === "nx:snapshot") {
+        if (p.file === undefined || p.lines === undefined) return;
+        st.files[p.file] = (p.lines || []).join("\n");
+        if (p.file === st.active) {
+          if (focusedDirty()) return;
+          setEditor(st.files[p.file]);
+        }
+        render();
+      } else if (ev === "presence" && p.id) {
+        st.members[p.id] = p;
+        render();
+      } else if (ev === "nx:file" && p.name) {
+        if (p.open && st.files[p.name] === undefined) st.files[p.name] = "";
+        render();
+      }
+    }
+  };
+}
+
+function handleCode(p) {
+  if (p.file === undefined || p.code === undefined) return;
+  if (st.lastSent[p.file] === p.code) return;      // our own echo / no-op
+  st.files[p.file] = p.code;
+  if (p.file === st.active) {
+    if (focusedDirty()) return;                     // keep the live edit (LWW on next keystroke)
+    setEditor(p.code);
+  }
+  render();
+}
+
+function focusedDirty() {
+  const ta = $("editor");
+  return document.activeElement === ta && st.active && ta.value !== st.files[st.active];
+}
+
+function selectFile(name) {
+  st.active = name;
+  setEditor(st.files[name] || "");
+  render();
+}
+
+function setEditor(code) {
+  const ta = $("editor");
+  const wasFocused = document.activeElement === ta;
+  ta.value = code;
+  updateStats();
+  if (wasFocused) ta.focus();
+}
+
+function sendPresence() {
+  if (!st.ws || st.ws.readyState !== 1) return;
+  if (!st.myId) st.myId = (crypto.randomUUID ? crypto.randomUUID() : "w" + Math.random().toString(36).slice(2));
+  st.ws.send(wsEvt("presence", {
+    id: st.myId, name: st.myName || "guest",
+    color: colorOf(st.myName || "guest"), ts: Date.now(),
+  }));
+}
+
+function onEdit() {
+  updateStats();
+  clearTimeout(st.sendTimer);
+  st.sendTimer = setTimeout(() => {
+    if (!st.ws || st.ws.readyState !== 1 || !st.active) return;
+    const code = $("editor").value;
+    st.lastSent[st.active] = code;
+    st.ws.send(wsEvt("code", { author: st.myName || "guest", file: st.active, code }));
+    st.sentAnything = true;
+  }, 150);
+}
+
+function updateStats() {
+  const n = $("editor").value.split("\n").length;
+  $("lines").textContent = `${n} lines`;
+  $("fname").textContent = st.active || "";
+}
+
+function render() {
+  const filesEl = $("files");
+  filesEl.innerHTML = "";
+  const names = Object.keys(st.files).sort();
+  if (!names.length) {
+    filesEl.innerHTML = '<div id="empty">No files in the workspace yet.</div>';
+  }
+  for (const name of names) {
+    const div = document.createElement("div");
+    div.className = "file" + (name === st.active ? " active" : "");
+    div.innerHTML = `<span class="dot" style="background:${colorOf(name)}"></span><span>${escapeHtml(name)}</span>`;
+    div.onclick = () => selectFile(name);
+    filesEl.appendChild(div);
+  }
+  const teamEl = $("team");
+  teamEl.innerHTML = "";
+  const me = { id: st.myId, name: st.myName || "guest", color: colorOf(st.myName || "guest"), you: true };
+  const rows = [me, ...Object.values(st.members)];
+  const seen = new Set();
+  for (const m of rows) {
+    if (!m || !m.name || seen.has(m.name)) continue;
+    seen.add(m.name);
+    const div = document.createElement("div");
+    div.className = "mem" + (m.you ? " you" : "");
+    div.innerHTML = `<span class="dot" style="background:${m.color}"></span><span>${escapeHtml(m.name)}${m.you ? " (you)" : ""}</span>`;
+    teamEl.appendChild(div);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+$("editor").addEventListener("input", onEdit);
+$("editor").addEventListener("keydown", e => {
+  if (e.key === "Tab") { e.preventDefault(); insertTab(); }
+  if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+    e.preventDefault();
+    onEdit();
+    toast("Sent to workspace");
+  }
+});
+function insertTab() {
+  const ta = $("editor");
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  ta.value = ta.value.slice(0, s) + "  " + ta.value.slice(e);
+  ta.selectionStart = ta.selectionEnd = s + 2;
+  onEdit();
+}
+$("name").addEventListener("change", () => {
+  const v = $("name").value.trim();
+  if (v) { st.myName = v; localStorage.setItem("nexus.name", v); toast(`Joined as ${v}`); sendPresence(); }
+});
+$("name").value = st.myName = localStorage.getItem("nexus.name") || "";
+sendPresence();
+connect();
+</script>
+</body>
+</html>
