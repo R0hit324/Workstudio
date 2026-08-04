@@ -87,7 +87,16 @@ pub struct EditorFile {
     pub last_sent: Vec<String>,
     /// True while the live buffer differs from `canonical` (unconfirmed edits).
     pub pending: bool,
-    pub cursors: BTreeMap<String, (usize, usize)>,
+    pub cursors: BTreeMap<String, RemoteCursor>,
+}
+
+/// A peer's last-known cursor position in a file, with the wall-clock time it
+/// was received so stale cursors can be pruned independently of presence.
+#[derive(Clone, Copy)]
+pub struct RemoteCursor {
+    pub line: usize,
+    pub col: usize,
+    pub ts: i64,
 }
 
 pub struct Member {
@@ -95,6 +104,10 @@ pub struct Member {
     pub color: Color,
     pub ts: i64,
 }
+
+/// Remote cursors older than this (ms) are dropped even if the member is still
+/// present: a peer that stops moving for a while shouldn't leave a ghost.
+pub const CURSOR_TTL_MS: i64 = 12_000;
 
 pub struct AcState {
     pub word: String,
@@ -1091,7 +1104,14 @@ impl App {
                         f.cursors.remove(&m.id);
                     }
                     if let Some(f) = self.files.get_mut(&m.file) {
-                        f.cursors.insert(m.id.clone(), (m.line, m.col));
+                        f.cursors.insert(
+                            m.id.clone(),
+                            RemoteCursor {
+                                line: m.line,
+                                col: m.col,
+                                ts: now_ms(),
+                            },
+                        );
                         self.members.insert(
                             m.id,
                             Member {
@@ -1300,16 +1320,29 @@ impl App {
             self.send_presence();
             self.send_cursor_now();
             // prune stale members
-            let now_ms = now_ms();
+            let now_ms_val = now_ms();
             let stale: Vec<String> = self
                 .members
                 .iter()
-                .filter(|(_, m)| now_ms - m.ts > 15000)
+                .filter(|(_, m)| now_ms_val - m.ts > 15000)
                 .map(|(k, _)| k.clone())
                 .collect();
             for k in stale {
                 self.members.remove(&k);
                 for f in self.files.values_mut() {
+                    f.cursors.remove(&k);
+                }
+            }
+            // prune per-file cursor ghosts even for live members
+            let cur_now = now_ms();
+            for f in self.files.values_mut() {
+                let ghost: Vec<String> = f
+                    .cursors
+                    .iter()
+                    .filter(|(_, c)| cur_now - c.ts > CURSOR_TTL_MS)
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for k in ghost {
                     f.cursors.remove(&k);
                 }
             }

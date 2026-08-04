@@ -438,20 +438,43 @@ fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
     // remote cursors
     {
         let buf = f.buffer_mut();
-        for (id, (r, c)) in &remote_cursors {
+        for (id, rc) in &remote_cursors {
             let color = app.members.get(id).map(|m| m.color).unwrap_or(th.accent);
-            let vis = *r as i64 - app.scroll_row as i64;
+            let vis = rc.line as i64 - app.scroll_row as i64;
             if vis < 0 || vis >= height as i64 {
                 continue;
             }
             let row = (content.y as i64 + vis) as u16;
-            let vc = *c as i64 - app.scroll_col as i64;
+            let vc = rc.col as i64 - app.scroll_col as i64;
             if vc < 0 || vc >= width as i64 {
                 continue;
             }
             let cx = (content.x as i64 + vc) as u16;
             buf[(cx, row)].set_bg(color);
             buf[(cx, row)].set_fg(th.surface);
+            buf[(cx, row)].set_style(Style::new().add_modifier(Modifier::REVERSED));
+            // name chip: member initials in a colored block, right of the caret
+            // if there is room, otherwise left of it.
+            if let Some(mem) = app.members.get(id) {
+                let chip: Vec<char> = mem.name.chars().take(2).collect::<String>().to_uppercase().chars().collect();
+                let len = chip.len() as i64;
+                let start = if cx as i64 + 1 + len < (content.x as i64 + width as i64) {
+                    cx as i64 + 1
+                } else if cx as i64 - len >= content.x as i64 {
+                    cx as i64 - len
+                } else {
+                    -1
+                };
+                if start >= 0 {
+                    for (k, ch) in chip.iter().enumerate() {
+                        let lx = (start + k as i64) as u16;
+                        buf[(lx, row)].set_char(*ch);
+                        buf[(lx, row)].set_fg(th.surface);
+                        buf[(lx, row)].set_bg(color);
+                        buf[(lx, row)].set_style(Style::new().add_modifier(Modifier::BOLD));
+                    }
+                }
+            }
         }
     }
 
