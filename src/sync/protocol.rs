@@ -8,6 +8,7 @@ pub const EV_SNAPSHOT: &str = "nx:snapshot";
 pub const EV_SNAP_REQ: &str = "nx:snap_req";
 pub const EV_FILE: &str = "nx:file";
 pub const EV_LOAD_REQ: &str = "nx:load_req";
+pub const EV_SAVE_REQ: &str = "nx:save_req";
 pub const EV_WEB_CODE: &str = "code";
 pub const EV_WEB_PRESENCE: &str = "presence";
 
@@ -72,6 +73,13 @@ pub struct CursorMsg {
     pub file: String,
     pub line: usize,
     pub col: usize,
+}
+
+/// A joiner asking the host to persist and git-commit the workspace as `name`
+/// (the session owner's repo lives on the host, but any user can save).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SaveReqMsg {
+    pub name: String,
 }
 
 /// A replacement of `remove` lines starting at `start` with `lines`.

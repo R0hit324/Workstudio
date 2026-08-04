@@ -12,8 +12,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 use super::protocol::{
-    PatchMsg, Presence, SnapshotMsg, SnapReqMsg, WelcomeFile, Wire, EV_LOAD_REQ, EV_PATCH,
-    EV_PRESENCE, EV_SNAPSHOT, EV_SNAP_REQ,
+    PatchMsg, Presence, SaveReqMsg, SnapshotMsg, SnapReqMsg, WelcomeFile, Wire, EV_LOAD_REQ,
+    EV_PATCH, EV_PRESENCE, EV_SAVE_REQ, EV_SNAPSHOT, EV_SNAP_REQ,
 };
 use super::{Cmd, Ev, StoredFile};
 use crate::patch::{apply_blocks, rebase_blocks};
@@ -186,18 +186,12 @@ impl Hub {
             }
             Cmd::SaveAll(_files) => {
                 // The store is canonical: persist it, then commit as the owner.
-                self.persist();
-                if crate::git::is_repo(&self.dir) {
-                    let author = if self.cfg.name.trim().is_empty() {
-                        "host".to_string()
-                    } else {
-                        self.cfg.name.trim().to_string()
-                    };
-                    let msg = format!("nexus: save {}", self.cfg.room);
-                    if let Err(e) = crate::git::commit(&self.dir, &msg, &author) {
-                        eprintln!("nexus host: git commit: {e}");
-                    }
-                }
+                let author = if self.cfg.name.trim().is_empty() {
+                    "host".to_string()
+                } else {
+                    self.cfg.name.trim().to_string()
+                };
+                self.persist_and_commit(&author);
                 let _ = self
                     .ev_tx
                     .send(Ev::SaveDone { count: self.store.len() });
@@ -218,6 +212,15 @@ impl Hub {
         if event == EV_LOAD_REQ {
             let wire = self.welcome();
             self.send_to_peer(peer, &wire);
+            return;
+        }
+        if event == EV_SAVE_REQ {
+            // A joiner asked us to save + commit as them (the repo is ours).
+            let author = serde_json::from_value::<SaveReqMsg>(payload)
+                .map(|m| m.name)
+                .unwrap_or_default();
+            self.persist_and_commit(&author);
+            let _ = self.ev_tx.send(Ev::SaveDone { count: self.store.len() });
             return;
         }
         if event == EV_PATCH {
@@ -365,6 +368,23 @@ impl Hub {
     }
 
     // ── persistence ──
+
+    /// Persist the store to disk and, if the workspace is a git repo, commit it
+    /// as `author` (session owner or the joiner who pressed Ctrl+S).
+    fn persist_and_commit(&mut self, author: &str) {
+        self.persist();
+        if crate::git::is_repo(&self.dir) {
+            let author = if author.trim().is_empty() {
+                "host".to_string()
+            } else {
+                author.trim().to_string()
+            };
+            let msg = format!("nexus: save {}", self.cfg.room);
+            if let Err(e) = crate::git::commit(&self.dir, &msg, &author) {
+                eprintln!("nexus host: git commit: {e}");
+            }
+        }
+    }
 
     fn persist(&mut self) {
         if let Err(e) = std::fs::create_dir_all(&self.dir) {

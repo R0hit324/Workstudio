@@ -26,9 +26,11 @@ Other devices: nexus --connect 192.168.1.10:8245
   WebSocket. Every edit is sent as a line-diff patch; the host relays patches,
   cursors, and presence to all other connected devices.
 - **Git:** if the host's directory is a git repository, pressing `Ctrl+S` stages
-  and commits the workspace as the **session owner** (`git log` attribution via
-  `--author`). Non-git directories just save to disk. A branch + commit-count
-  indicator appears in the status bar, and `Ctrl+J` opens the commit log.
+  and commits the workspace as the **person who saved** (`git log` attribution via
+  `--author`) — the session owner when the host saves, or the joiner's display
+  name when a joiner saves. Non-git directories just save to disk. A branch +
+  commit-count indicator appears in the status bar, and `Ctrl+J` opens the
+  commit log.
 - **Joining late:** a new device receives a full snapshot (all files + current
   members) the moment it connects, then stays in sync via patches.
 - **Conflict resolution (rebase + last-writer-wins):** the host serializes all
@@ -103,5 +105,5 @@ panel with the exact join command to share with your team.
 - [x] LAN host/join sync (all subnets) with presence, live cursors, and persistence
 - [x] Git: host commits workspace dir as session owner; status bar + git log modal
 - [x] Multiple cursors UX polish for multiple users
-- [ ] Git support for all users (joiners, not just the host)
+- [x] Git support for all users (joiners, not just the host)
 - [ ] Web-app interop via the same LAN WebSocket

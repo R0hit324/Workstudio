@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::protocol::{Wire, EV_LOAD_REQ, EV_PRESENCE};
+use super::protocol::{Wire, EV_LOAD_REQ, EV_PRESENCE, EV_SAVE_REQ};
 use super::{Cmd, Ev, StoredFile};
 
 pub fn spawn(cfg: Config, ev_tx: mpsc::UnboundedSender<Ev>, rx: mpsc::UnboundedReceiver<Cmd>) {
@@ -22,7 +22,7 @@ async fn run(
     let url = cfg.join_url();
     let mut backoff = Duration::from_millis(500);
     loop {
-        match session(&url, &ev_tx, &mut cmd_rx).await {
+        match session(&url, &ev_tx, &mut cmd_rx, &cfg.name).await {
             Ok(()) => backoff = Duration::from_millis(500),
             Err(e) => {
                 let _ = ev_tx.send(Ev::Disconnected(e.to_string()));
@@ -37,6 +37,7 @@ async fn session(
     url: &str,
     ev_tx: &mpsc::UnboundedSender<Ev>,
     cmd_rx: &mut mpsc::UnboundedReceiver<Cmd>,
+    author: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (ws, _) = tokio_tungstenite::connect_async(url).await?;
     let (w, mut r) = ws.split();
@@ -104,7 +105,17 @@ async fn session(
                 }
             }
             Cmd::SaveAll(files) => {
-                // The host persists automatically; this is just a local ack.
+                // The store lives on the host, so ask it to persist + git-commit
+                // as us, then ack locally so Ctrl+S feels instant.
+                let req = json!({"name": author});
+                let wire = json!({"ty": "evt", "event": EV_SAVE_REQ, "payload": req});
+                if writer
+                    .send(Message::Text(wire.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
                 let _ = ev_tx.send(Ev::SaveDone { count: files.len() });
             }
             Cmd::LoadAll => {
