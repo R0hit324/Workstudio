@@ -1,0 +1,29 @@
+[package]
+name = "nexus"
+version = "0.1.0"
+edition = "2021"
+description = "Nexus Code — collaborative IDE TUI (Rust)"
+
+[[bin]]
+name = "nexus"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+tui-textarea = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-util", "process"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+rand = "0.9"
+chrono = { version = "0.4", features = ["serde"] }
+local-ip-address = "0.6"
+
+[profile.release]
+lto = true

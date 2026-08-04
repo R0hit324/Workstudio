@@ -1,0 +1,120 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+pub const EV_PRESENCE: &str = "nx:presence";
+pub const EV_CURSOR: &str = "nx:cursor";
+pub const EV_PATCH: &str = "nx:patch";
+pub const EV_SNAPSHOT: &str = "nx:snapshot";
+pub const EV_SNAP_REQ: &str = "nx:snap_req";
+pub const EV_FILE: &str = "nx:file";
+pub const EV_LOAD_REQ: &str = "nx:load_req";
+pub const EV_WEB_CODE: &str = "code";
+pub const EV_WEB_PRESENCE: &str = "presence";
+
+/// Wire envelope exchanged over the LAN WebSocket.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Wire {
+    /// "evt" (relay a broadcast), "welcome" (host → joiner full state), "ping"/"pong"
+    pub ty: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<WelcomeFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<Presence>>,
+}
+
+impl Wire {
+    pub fn evt(event: &str, payload: Value) -> Self {
+        Self {
+            ty: "evt".into(),
+            event: Some(event.to_string()),
+            payload: Some(payload),
+            files: None,
+            members: None,
+        }
+    }
+    pub fn welcome(files: Vec<WelcomeFile>, members: Vec<Presence>) -> Self {
+        Self {
+            ty: "welcome".into(),
+            event: None,
+            payload: None,
+            files: Some(files),
+            members: Some(members),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WelcomeFile {
+    pub name: String,
+    pub lang: String,
+    pub code: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Presence {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub ts: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CursorMsg {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub file: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// A replacement of `remove` lines starting at `start` with `lines`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LinePatch {
+    pub start: usize,
+    pub remove: usize,
+    pub lines: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PatchMsg {
+    pub id: String,
+    pub file: String,
+    pub lang: String,
+    pub base_rev: u64,
+    pub patches: Vec<LinePatch>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SnapshotMsg {
+    pub id: String,
+    pub file: String,
+    pub lang: String,
+    pub rev: u64,
+    pub lines: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SnapReqMsg {
+    pub id: String,
+    pub file: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FileMsg {
+    pub id: String,
+    pub name: String,
+    pub lang: String,
+    pub open: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WebCodeMsg {
+    pub author: String,
+    pub file: String,
+    pub code: String,
+}
