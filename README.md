@@ -102,6 +102,6 @@ panel with the exact join command to share with your team.
 
 - [x] LAN host/join sync (all subnets) with presence, live cursors, and persistence
 - [x] Git: host commits workspace dir as session owner; status bar + git log modal
-- [ ] Multiple cursors UX polish for multiple users
+- [x] Multiple cursors UX polish for multiple users
 - [ ] Git support for all users (joiners, not just the host)
 - [ ] Web-app interop via the same LAN WebSocket
